@@ -279,6 +279,8 @@ export function StatusLine({
   // jobs, shown only while non-zero — a silent zero is not information.
   // Not preference-gated: it is transient situational state like the goal
   // chip, not chrome. Hover lists the live jobs with elapsed times.
+  // Marker is ●, NOT ⚙ (U+2699 is EA-ambiguous: ink measures 1 cell, CJK
+  // terminal fonts paint 2 → the count overlaps the glyph).
   const liveJobs = (channel.backgroundJobs ?? NO_BACKGROUND_JOBS).filter(
     job => job.status === 'running' || job.status === 'stopping',
   )
@@ -289,7 +291,7 @@ export function StatusLine({
         id: 'jobs',
         node: (
           <Text color="toolDotTask">
-            {'⚙ '}{liveJobs.length}
+            {'● '}{liveJobs.length}
           </Text>
         ),
       }

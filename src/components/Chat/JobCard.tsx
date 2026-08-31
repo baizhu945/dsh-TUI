@@ -14,8 +14,10 @@ const WATERFALL_GUTTER = 4
 
 /** Static status marker — deliberately NOT the animated activity-indicator
  *  preset: a background job is parked work, and reusing the main spinner
- *  language for every card reads as clutter. Gear = live background work
- *  (echoing the status-line ⚙ chip), ✓/✗ for terminal states. */
+ *  language for every card reads as clutter. ● = live background work
+ *  (echoing the status-line chip), ✓/✗ for terminal states. NOTE: no ⚙ —
+ *  U+2699 is East-Asian Ambiguous: ink measures it 1 cell while CJK
+ *  terminal fonts paint it 2, so the following text overlaps the glyph. */
 function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string; color: keyof Theme | undefined } {
   const minimal = isMinimalMode()
   switch (status) {
@@ -26,9 +28,9 @@ function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string
     case 'killed':
       return { glyph: '✗', label: t('jobs-status-killed'), color: minimal ? undefined : 'error' }
     case 'stopping':
-      return { glyph: '⚙', label: t('jobs-status-stopping'), color: minimal ? undefined : 'warning' }
+      return { glyph: '●', label: t('jobs-status-stopping'), color: minimal ? undefined : 'warning' }
     default:
-      return { glyph: '⚙', label: t('jobs-status-running'), color: minimal ? undefined : 'warning' }
+      return { glyph: '●', label: t('jobs-status-running'), color: minimal ? undefined : 'warning' }
   }
 }
 

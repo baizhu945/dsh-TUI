@@ -467,7 +467,7 @@ export function MessageList({
   /** True when frame-budgeted history painting still has batches left
    *  (main-screen open): the layout effect schedules the next slice. */
   const paintPendingRef = React.useRef(false)
-  const paintQueuedRef = React.useRef(false)
+  const paintTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Persistent history-paint edge: how far batched painting has advanced
    *  (index into visibleRows). -1 = not painting / reset (list head change:
    *  rewind, new session, loadOlder — must repaint from scratch). */
@@ -482,9 +482,19 @@ export function MessageList({
   if (listHeadId !== undefined) paintedBaseRef.current = listHeadId
   /** Content-space offset of visibleRows[0] (header + dividers), measured. */
   const baseRef = React.useRef<number | null>(null)
-  const measureQueuedRef = React.useRef(false)
+  const measureTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const [, setMeasureTick] = React.useState(0)
   const [, setScrollTick] = React.useState(0)
+  React.useEffect(() => () => {
+    if (measureTimerRef.current !== null) {
+      clearTimeout(measureTimerRef.current)
+      measureTimerRef.current = null
+    }
+    if (paintTimerRef.current !== null) {
+      clearTimeout(paintTimerRef.current)
+      paintTimerRef.current = null
+    }
+  }, [])
 
   // A width change reflows every row — all measurements are stale.
   const lastColumns = React.useRef(columns)
@@ -996,15 +1006,15 @@ export function MessageList({
         )
       }
     }
-    if (changed && !measureQueuedRef.current) {
-      // Layout corrections can cascade for many rows. Yield between commits
-      // so React does not count the valid convergence as nested updates.
-      measureQueuedRef.current = true
-      queueMicrotask(() => {
-        measureQueuedRef.current = false
+    if (changed && measureTimerRef.current === null) {
+      // Layout corrections can cascade for many rows. Yield to the next
+      // macrotask so React does not count the valid convergence as nested
+      // updates when a streaming/reveal commit is already in flight.
+      measureTimerRef.current = setTimeout(() => {
+        measureTimerRef.current = null
         noteFrameCause('measure')
         setMeasureTick(t => t + 1)
-      })
+      }, 0)
     }
     // History-paint continuation (main-screen open): more never-painted
     // batches remain — schedule the next slice on the macrotask queue so
@@ -1013,10 +1023,9 @@ export function MessageList({
     // enough: each batch's mount+measure work is bounded (~2 viewports),
     // unlike the previous single-commit full mount that saturated the main
     // thread for seconds.
-    if (paintPendingRef.current && !paintQueuedRef.current) {
-      paintQueuedRef.current = true
-      setTimeout(() => {
-        paintQueuedRef.current = false
+    if (paintPendingRef.current && paintTimerRef.current === null) {
+      paintTimerRef.current = setTimeout(() => {
+        paintTimerRef.current = null
         if (!paintPendingRef.current) return
         noteFrameCause('measure')
         setMeasureTick(t => t + 1)

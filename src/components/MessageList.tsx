@@ -1058,6 +1058,10 @@ export function MessageList({
           const addMargin = margins.get(row.id) === true
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
+          const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
+            row.tool?.status === 'running' && row.tool.resultView === undefined
+            ? getRevealVersion()
+            : 0
           // Smooth reveal feeds the SAME flattened text prop a chunk feeds,
           // and keeps the streaming layout alive until the reveal catches up
           // (settling mid-reveal must not snap — a one-shot non-streaming
@@ -1098,6 +1102,7 @@ export function MessageList({
               foldTerminalCommand={foldTerminalCommand}
               smoothStreaming={smoothStreaming}
               fresh={row.fresh === true}
+              revealVersion={revealVersion}
               activityFrames={activityFrames}
               background={rowBackground(row.id)}
               toolCallId={tool?.callId}
@@ -1160,6 +1165,8 @@ type MemoRowProps = {
   smoothStreaming: boolean
   /** Live-arrived row flag (drives tool-card reveal participation). */
   fresh: boolean
+  /** Version tick for active tool reveal; 0 keeps settled rows memoized. */
+  revealVersion: number
   thinkingFold: 'preview' | 'full'
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
@@ -1232,6 +1239,7 @@ function TranscriptRow({
   diffLayout,
   smoothStreaming,
   fresh,
+  revealVersion,
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
@@ -1403,6 +1411,7 @@ function TranscriptRow({
             toolBackground={toolBackground}
             smoothReveal={smoothStreaming}
             fresh={fresh}
+            revealVersion={revealVersion}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}

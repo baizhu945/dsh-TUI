@@ -999,8 +999,8 @@ export function parseMultipleKeypresses(
   // exists to prevent. Partial recovery of the coords is not worth one more
   // branch — a mouse event with guessed terminators would dispatch phantom
   // clicks. A hold captured in THIS call survives its own flush: ConPTY can
-  // deliver the first read's remainder after the timer armed (the very D-
-  // scenario the hold exists for), and the next call completes it.
+  // deliver the first read's remainder after the timer armed (the very case-D
+  // partial read (win32-input regression) the hold exists for), and the next call completes it.
   if (isFlush && mouseTailHold !== undefined && !holdTouchedThisCall) {
     mouseTailHold = undefined
   }

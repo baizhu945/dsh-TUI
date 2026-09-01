@@ -234,6 +234,7 @@ export function MessageList({
   onOpenJobs,
   onOpenFile,
   onPreviewImage,
+  suppressImageGraphics = false,
 }: {
   rows: readonly ChatRow[]
   expanded: boolean
@@ -324,6 +325,8 @@ export function MessageList({
   onOpenFile?: (path: string) => void
   /** 点击 transcript 缩略图（打开共享的大图预览 overlay）。 */
   onPreviewImage?: (image: TranscriptImage) => void
+  /** Modal preview owns the terminal-image frame budget while open. */
+  suppressImageGraphics?: boolean
 }) {
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
   // The thinking filter runs BEFORE virtualization so window indices line up.
@@ -1181,6 +1184,7 @@ export function MessageList({
               onOpenJobs={onOpenJobs}
               onOpenFile={onOpenFile}
               onPreviewImage={onPreviewImage}
+              suppressImageGraphics={suppressImageGraphics}
               setRowRef={setRowRef}
             />
           )
@@ -1264,6 +1268,7 @@ type MemoRowProps = {
   onOpenJobs: (() => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   onPreviewImage: ((image: TranscriptImage) => void) | undefined
+  suppressImageGraphics: boolean
   setRowRef: (rowId: number, el: DOMElement | null) => void
 }
 
@@ -1330,6 +1335,7 @@ function TranscriptRow({
   onOpenJobs,
   onOpenFile,
   onPreviewImage,
+  suppressImageGraphics,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
   const ref = React.useCallback(
@@ -1372,7 +1378,7 @@ function TranscriptRow({
           )}
           {images !== undefined && (
             <Box marginTop={text === '' && addMargin ? 1 : 0}>
-              <TranscriptImages images={images} onPreview={onPreviewImage} />
+              <TranscriptImages images={images} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />
             </Box>
           )}
         </Box>
@@ -1395,7 +1401,7 @@ function TranscriptRow({
               is stripped here: the live working line on the status bar
               already shows it. */}
             <StreamingMarkdown>{stripNarration(text)}</StreamingMarkdown>
-            {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} />}
+            {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
           </Box>
         </Box>
       ) : (
@@ -1421,7 +1427,7 @@ function TranscriptRow({
             isSelected={isSelected}
             isExpanded={isExpanded}
           />
-          {images !== undefined && <TranscriptImages images={images} onPreview={onPreviewImage} />}
+          {images !== undefined && <TranscriptImages images={images} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
         </Box>
       )
     case 'reasoning': {
@@ -1490,7 +1496,7 @@ function TranscriptRow({
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
           />
-          {images !== undefined && <TranscriptImages images={images} indent={4} onPreview={onPreviewImage} />}
+          {images !== undefined && <TranscriptImages images={images} indent={4} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
         </Box>
       )
     }

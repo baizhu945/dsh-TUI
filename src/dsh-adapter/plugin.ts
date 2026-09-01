@@ -10,6 +10,7 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
+import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { logForDebugging } from '../utils/debug.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
@@ -553,6 +554,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  // Register the live Channel for the adapter Kernel. The Channel driver
+  // resolves it lazily from the composition root, so this can be called after
+  // the plugin-host Kernel started without requiring a re-mount.
+  registerTuiChannel(ctx, channel)
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped

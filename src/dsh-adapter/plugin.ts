@@ -12,8 +12,9 @@ import { Config } from './index.js'
 import { createChannel } from './channel.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { logForDebugging } from '../utils/debug.js'
-import { QuestionStore } from './questions.js'
-import { ApprovalStore } from './approvals.js'
+import { QuestionStore, bindQuestionStore } from './questions.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
@@ -315,7 +316,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
     return filterMinimalPresetTools(assembled, presetId)
   })
-  const questionStore = new QuestionStore()
+  const questionStore = new QuestionStore(adapterRuntimeFor(ctx))
+  bindQuestionStore(ctx, questionStore)
   // `/debug-prompt` snapshots the final provider-neutral request at the
   // llm/stream boundary, after every prompt and tool contributor has run.
   registerPromptDebug(ctx)
@@ -863,7 +865,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   {
     const settingsSections = getHostSettingsSections(
       ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-    ) ?? getLocalSettingsSectionsHost()
+    ) ?? getLocalSettingsSectionsHost(ctx)
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',
@@ -1194,7 +1196,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // being mounted — a bare composition without the dsh-base approval row
   // has nothing to answer into. channel.agentId tracks agent swaps
   // (/new, /resume, rewind), so ownership is re-evaluated per request.
-  const approvalStore = new ApprovalStore()
+  const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
+  bindApprovalStore(ctx, approvalStore)
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
       String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())

@@ -2,11 +2,10 @@ import { randomUUID } from 'node:crypto'
 import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
-import UserQuestionService, { type UserQuestionProvider } from '@deepseek-ai/dsh-user-questions'
-import { decideQuestionProviderYield, incumbentQuestionProviderId, tagTuiQuestionProvider } from './providerGuard.js'
+import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
@@ -15,6 +14,7 @@ import { createChildStderrReporter, installChildStderrGuard } from './childStder
 import { logForDebugging } from '../utils/debug.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
@@ -22,7 +22,7 @@ import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readA
 import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
-import { readPresetPref } from '../presetPrefs.js'
+import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes } from './compat/index.js'
@@ -30,7 +30,7 @@ import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../s
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_STATUS_BAR, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -43,6 +43,7 @@ import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/pat
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
+import { openInjectChannel, type InjectController } from './inject-channel.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
@@ -54,6 +55,7 @@ import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettings
 import { notifyViaChannelFacade, submitViaChannelFacade } from './channel-facade-actions.js'
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
+import { PageMargin } from '../components/PageMargin.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
@@ -298,14 +300,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
 
   // DSH user-interaction seam: the model's ask_user_question tool parks on
-  // the userInteraction service until a UI provider answers. Mount the
+  // the userQuestions service until a UI answerer responds. Mount the
   // service when the composition doesn't (the official dsh-base
   // user-interaction config row does; a bare plugin mount creates it on
-  // this context), expose the model-facing tool, and register this TUI's
-  // questionnaire as the provider. All three must be in place before the
-  // agent is resolved so the per-step tool assembly includes
-  // ask_user_question. Optional-service access goes through `ctx.get`, not
-  // the inject proxy.
+  // this context), then expose the model-facing tool before resolving the
+  // agent so per-step assembly includes ask_user_question. rc.2's provider
+  // seat is registered below; alpha.2's agent-aware waterfall needs the
+  // channel owner and is therefore registered immediately after the channel
+  // is created. Optional-service access goes through `ctx.get`, not the
+  // inject proxy.
   const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
   // The host-level tool mount above is intentional for the TUI and for user
@@ -320,50 +323,33 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   const questionStore = new QuestionStore(adapterRuntimeFor(ctx))
   bindQuestionStore(ctx, questionStore)
+  // One store, one teardown effect on both API lines. The compatibility
+  // adapter binds either registration to this Cordis fiber; this separate
+  // effect rejects asks still parked in the UI during teardown.
+  ctx.effect(() => () => questionStore.rejectAll())
   // `/debug-prompt` snapshots the final provider-neutral request at the
   // llm/stream boundary, after every prompt and tool contributor has run.
   registerPromptDebug(ctx)
-  // Yield to an incumbent provider instead of crashing the whole plugin tree
-  // (issue #98): the harness allows exactly ONE user-questions provider per
-  // context, and stacking this TUI onto a profile that already carries
-  // @deepseek-ai/dsh-web-app (its api-gateway registers first) used to fail
-  // the boot with DUPLICATE_PROVIDER. The incumbent UI then owns questionnaire
-  // rendering; this TUI's ask_user_question requests are answered there.
-  //
-  // Security follow-up: silence must be reserved for host-VERIFIED front
-  // doors. A plugin that registers FIRST owns the seat just the same, and
-  // would then answer ask_user_question on the user's behalf without any
-  // signal. The DUPLICATE_PROVIDER error carries no incumbent identity, so
-  // the seat is probed structurally: the silent yield now requires this
-  // TUI's private symbol tag (or any future host-verified marker) on a
-  // whitelisted incumbent; a whitelist name the incumbent merely
-  // SELF-REPORTED (name/hostId/id fields are trivially copyable) gets an
-  // honest "identity not host-verified" alert instead — forgeable silence
-  // is worse than a loud warning. Anything else stays unregistered (the
-  // composition must not crash) but the user is told loudly.
-  const tuiQuestionProvider: UserQuestionProvider = { ask: request => questionStore.ask(request) }
-  tagTuiQuestionProvider(tuiQuestionProvider)
+  // API selection and registration live behind one adapter boundary. The UI
+  // bootstrap only translates a legacy seat conflict into its visible notice.
+  const questionAnswererRegistration = prepareQuestionAnswerer(ctx, userQuestions, questionStore)
+  const questionSeatDecision = questionAnswererRegistration.kind === 'legacy'
+    ? questionAnswererRegistration.yieldDecision
+    : undefined
   let questionSeatNotice: string | undefined
-  try {
-    userQuestions.registerProvider(tuiQuestionProvider)
-    ctx.effect(() => () => questionStore.rejectAll())
-  } catch (error) {
-    if ((error as { code?: string }).code !== 'DUPLICATE_PROVIDER') throw error
-    const decision = decideQuestionProviderYield(incumbentQuestionProviderId(userQuestions))
-    if (decision.action === 'alert-unverified') {
-      ctx.logger.error(
-        `dsh-tui: user-questions provider seat is held by a component self-reporting as ${decision.incumbentId} ` +
-          '(identity not host-verified); this TUI will not register its questionnaire and model questions may be answered by it',
-      )
-      questionSeatNotice = t('question-provider-occupied-unverified', { id: decision.incumbentId ?? '' })
-    } else if (decision.action === 'alert') {
-      const displayId = decision.incumbentId ?? t('question-provider-occupied-unknown')
-      ctx.logger.error(
-        `dsh-tui: user-questions provider seat is held by a non-host component (${displayId}); ` +
-          'this TUI will not register its questionnaire and model questions may be answered by it',
-      )
-      questionSeatNotice = t('question-provider-occupied', { id: displayId })
-    }
+  if (questionSeatDecision?.action === 'alert-unverified') {
+    ctx.logger.error(
+      `dsh-tui: user-questions provider seat is held by a component self-reporting as ${questionSeatDecision.incumbentId} ` +
+        '(identity not host-verified); this TUI will not register its questionnaire and model questions may be answered by it',
+    )
+    questionSeatNotice = t('question-provider-occupied-unverified', { id: questionSeatDecision.incumbentId ?? '' })
+  } else if (questionSeatDecision?.action === 'alert') {
+    const displayId = questionSeatDecision.incumbentId ?? t('question-provider-occupied-unknown')
+    ctx.logger.error(
+      `dsh-tui: user-questions provider seat is held by a non-host component (${displayId}); ` +
+        'this TUI will not register its questionnaire and model questions may be answered by it',
+    )
+    questionSeatNotice = t('question-provider-occupied', { id: displayId })
   }
 
   // Child-process stderr guard (issue #17): MCP servers spawned with an
@@ -549,9 +535,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     thinkingFold: config.thinkingFold,
     toolBackground: config.toolBackground,
     scrollGutter: config.scrollGutter,
+    pageMargin: config.pageMargin,
     foldTerminalCommand: config.foldTerminalCommand,
     promptSessionLabel: config.promptSessionLabel,
     expandEditor: config.expandEditor,
+    smoothStreaming: config.smoothStreaming,
     statusBar: config.statusBar,
     handle,
   })
@@ -561,9 +549,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Normalize to the composition root: the Kernel and its Channel driver
   // query the registry through the root context, never through this plugin's
   // child activation context.
-  registerTuiChannel(compositionRoot(ctx), channel)
+  const unregisterTuiChannel = registerTuiChannel(compositionRoot(ctx), channel)
+  ctx.effect(() => () => { unregisterTuiChannel() })
   const pluginHost = ctx.get('tuiPluginHost')
   const adapterRuntime = adapterRuntimeFor(ctx)
+  // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
+  // the channel version bump (which re-renders everything below Chat)
+  // cannot drive it. Seed the store from config before the tree mounts;
+  // applyDisplay below mirrors every settings change into it live.
+  applyPageMargin(config.pageMargin)
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
@@ -574,6 +568,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   toastStore?.setSink(delivery => {
     notifyViaChannelFacade(pluginHost, channel, adapterRuntime, delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
   })
+  if (questionAnswererRegistration.kind === 'waterfall') {
+    // Ownership follows the mutable channel; registration cleanup belongs to
+    // this Cordis fiber.
+    questionAnswererRegistration.register(channel)
+  }
   // Fullscreen layout decision: the settings user layer (edited through the
   // /settings screen) overrides cordis.yml when set. The settings injection
   // below resolves it synchronously when the host settings service is up —
@@ -600,7 +599,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user layer in settings.yaml wins over cordis.yml's diffLayout, and
   // watch() lands commits on the live channel — no recompose needed.
   ctx.inject(['settings'], (settingsCtx) => {
-    const tuiSettingsNs = settingsNamespace('dsh-tui')
+    // alpha.2 removed the `settingsNamespace()` brand helper: register() now
+    // takes the raw string and validates it itself, while rc.2 still wants the
+    // branded handle. Brands are type-only, so the constant cast compiles
+    // against both lines and the runtime value is identical ('dsh-tui' always
+    // satisfied the namespace pattern).
+    const tuiSettingsNs = 'dsh-tui' as SettingsNamespace
     const scope = settingsCtx.settings.register(
       tuiSettingsNs,
       Schema.object({
@@ -608,6 +612,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
+        // Preset names AND custom `NxM` specs (the settings field's parse
+        // gate keeps junk out of the user layer; the transform normalizes
+        // whatever survives — cordis.yml junk included).
+        pageMargin: Schema.transform(
+          Schema.string().default('normal'),
+          value => normalizePageMargin(value),
+        ),
         // No default on purpose (same rule as `fullscreen` below): a schema
         // default here would come back from scope.get()/watch() and shadow
         // an explicit cordis.yml `foldTerminalCommand: true` while the
@@ -620,6 +631,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // resolves `?? config.expandEditor ?? true` so cordis.yml stays
         // decisive while the user layer is unset.
         expandEditor: Schema.boolean(),
+        // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
+        smoothStreaming: Schema.boolean(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -668,9 +681,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       thinkingFold?: 'preview' | 'full'
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
+      pageMargin?: PageMarginSetting
       foldTerminalCommand?: boolean
       promptSessionLabel?: boolean
       expandEditor?: boolean
+      smoothStreaming?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -709,9 +724,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
+      // Page margin: the channel carries the mode (tests observe it), the
+      // module store drives the actual inset box above Chat — keep both in
+      // lockstep so a live /settings edit re-lays out immediately.
+      const pageMargin = normalizePageMargin(value.pageMargin ?? config.pageMargin)
+      channel.setPageMargin(pageMargin)
+      applyPageMargin(pageMargin)
       channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
+      channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
@@ -939,8 +961,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           path: ['thinkingFold'],
           label: 'Thinking display',
           descriptions: { zh: '思考块展示' },
-          hint: 'Streaming thinking shows a 2-3 line live preview and each step folds when it settles; Full keeps thinking expanded until the turn ends.',
-          hintDescriptions: { zh: '流式时思考显示 2-3 行动态预览，每步落定后折叠；展开模式保持思考展开直到整轮结束。' },
+          hint: 'Preview shows 2-3 live lines; Full stays expanded until turn end. Click a streaming block to switch between preview and full.',
+          hintDescriptions: { zh: '预览模式显示 2-3 行动态思考；展开模式保持至轮末。点击流式思考块可在预览与全文间切换。' },
           kind: 'select',
           options: [
             { value: 'preview', label: 'Preview (2-3 lines)', descriptions: { zh: '预览（2-3 行）' } },
@@ -974,6 +996,25 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           ],
         },
         {
+          path: ['pageMargin'],
+          label: 'Page margin',
+          descriptions: { zh: '页边距' },
+          hint: 'Inset the whole UI from the terminal edges. Type a preset (none / slim / normal / roomy) or a custom spec `NxM`: N columns per side, M rows top/bottom (e.g. 3x1, max 8x4; a bare `N` keeps rows at 1). Empty resets to the default `normal`. Applies immediately.',
+          hintDescriptions: { zh: '让整个界面相对终端四边内缩。输入预设名（none / slim / normal / roomy）或自定义 `NxM`：左右各 N 列、上下各 M 行（如 3x1，上限 8x4；只填 N 则上下保持 1 行）。清空恢复默认 normal。立即生效。' },
+          kind: 'text',
+          placeholder: 'normal',
+          format(value: unknown): string {
+            return String(value ?? config.pageMargin ?? DEFAULT_PAGE_MARGIN)
+          },
+          parse(text: string) {
+            const draft = text.trim().toLowerCase()
+            if (draft === '') return { kind: 'clear' }
+            if (isPageMarginMode(draft)) return { kind: 'set', value: draft }
+            const spec = parsePageMarginSpec(draft)
+            return spec === undefined ? undefined : { kind: 'set', value: spec }
+          },
+        },
+        {
           path: ['foldTerminalCommand'],
           label: 'Fold terminal command',
           descriptions: { zh: '折叠终端命令' },
@@ -1004,6 +1045,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.expandEditor !== false)
+          },
+        },
+        {
+          path: ['smoothStreaming'],
+          label: 'Smooth streaming',
+          descriptions: { zh: '流式平滑输出' },
+          hint: 'Reveal live replies, expanded thinking, and tool-call bodies through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history always paints complete. On by default.',
+          hintDescriptions: { zh: '把实时回复、展开的思考与工具卡正文按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容始终完整直出。默认开启。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is on.
+            return String(typeof value === 'boolean' ? value : config.smoothStreaming !== false)
           },
         },
         {
@@ -1204,16 +1257,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
   // chain falls through to the fail-closed 'unavailable', so register this
-  // TUI as the interactive answerer for the agent it owns; requests for
-  // other agents delegate down the chain (next()). Guarded on the service
-  // being mounted — a bare composition without the dsh-base approval row
-  // has nothing to answer into. channel.agentId tracks agent swaps
-  // (/new, /resume, rewind), so ownership is re-evaluated per request.
+  // TUI as the interactive answerer for EVERY agent in this process — the
+  // attached session's asks and any background (agent view) session's asks
+  // alike, so an unattended session surfaces as "needs input" instead of
+  // failing closed. One ask is shown at a time, whichever agent asked.
+  // Guarded on the service being mounted — a bare composition without the
+  // dsh-base approval row has nothing to answer into.
   const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
   bindApprovalStore(ctx, approvalStore)
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
-      String(req.agent.id) === channel.agentId ? approvalStore.park(req) : next())
+      approvalStore.park(req).catch(() => next()))
     // Badge-flip push (P-4): React does not know the session log appended —
     // a source-badge verdict that only flips inside getSnapshot() surfaces
     // solely when something else re-renders. Feed the session firehose to
@@ -1225,6 +1279,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
+  // The agent view reads parked ask ids for its "needs input" state.
+  channel.bindApprovalStore(approvalStore)
   const herdr = attachHerdrIntegration({
     channel,
     questions: questionStore,
@@ -1375,6 +1431,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   const handleExit = funnel.handleExit
 
+  // External injection controller: Chat fills it with `{ append, submit }`
+  // every render; the injection socket (opened below) drives it. A ref rather
+  // than a prop callback so the socket handler always reaches the live Chat.
+  const injectControllerRef = React.createRef<InjectController | null>() as React.RefObject<InjectController | null>
+
   // Chat's `fullscreen` prop must match the root wrap below, or the
   // full-screen surfaces inside Chat (session browser, settings, trajectory,
   // subagent pages) would nest a SECOND <AlternateScreen> — whose unmount
@@ -1388,6 +1449,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     channel,
     questionStore,
     approvalStore,
+    injectControllerRef,
     // The dsh-tui-extensions row's services (managed dialogs, status line,
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.
@@ -1469,9 +1531,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // tracking), which turns on in-app text selection (copy-on-select via
   // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
   // mode leaves the mouse to the terminal emulator's native selection.
+  // PageMargin keeps the whole UI inset from the terminal edges (some
+  // terminals — bare WSL/tmux/SSH — have no own padding, so text touches
+  // the screen border). It must sit INSIDE AlternateScreen: the alt-screen
+  // box sizes itself to the real terminal rows, while PageMargin reports
+  // content-box dimensions to everything below it.
+  const marginChildren = bootedFullscreen
+    ? React.createElement(AlternateScreen, null, React.createElement(PageMargin, null, chat))
+    : React.createElement(PageMargin, null, chat)
   const tree = React.createElement(ThemeProvider, {
     themeHost,
-    children: bootedFullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
+    children: marginChildren,
   })
   instance = await render(tree, { exitOnCtrlC: false })
   const isRecompose = lastBootedFullscreen !== undefined
@@ -1482,6 +1552,23 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // parent only within the survival window — this line is the durable mark).
   if (process.env.DSH_TUI_RESTART_CHILD === '1') {
     logRestartEvent('boot: UI mounted', { fullscreen: bootedFullscreen, isRecompose })
+  }
+
+  // External injection channel (dsh.nvim etc.): expose a per-session local
+  // socket that appends text into the prompt input and submits it. Optional
+  // integration — a bind failure degrades to "no channel" and never fails the
+  // session. Closed on teardown so the socket and discovery record do not leak.
+  const injectChannel = openInjectChannel(
+    agent.session.id,
+    channel.cwd,
+    {
+      append: (text) => injectControllerRef.current?.append(text),
+      submit: () => injectControllerRef.current?.submit(),
+    },
+    (message) => ctx.logger.warn(`dsh-tui: ${message}`),
+  )
+  if (injectChannel) {
+    ctx.effect(() => () => injectChannel.close())
   }
 
   // Check in the background so registry latency never delays the first frame.
@@ -1616,7 +1703,13 @@ async function resolveAgent(
     }
   }
   const sessionId = SessionId(randomUUID())
-  const composed = await composePreset(ctx, configuredPreset ?? readPresetPref())
+  const presetPref = configuredPreset === undefined ? readPresetPref() : undefined
+  const composed = await composePreset(ctx, configuredPreset ?? presetPref)
+  if (!migratePresetPref(presetPref, composed.agentPreset)) {
+    ctx.logger.warn(
+      `dsh-tui: resolved preset preference "${presetPref}" as "${composed.agentPreset}" but could not persist the migrated id`,
+    )
+  }
   // Fresh-session route precedence (issues #14/#30/#67): resolved atomically
   // by the caller (complete cordis.yml route > the persisted `/model` choice
   // > the harness default), then validated against the adapter catalog — a

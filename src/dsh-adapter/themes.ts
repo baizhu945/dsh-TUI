@@ -182,7 +182,11 @@ function emit(state: ThemeState): void {
 }
 
 function resolveRuntimeTheme(runtime: TuiThemeRuntime, name: string): Theme | undefined {
-  assertCapabilityShadowPolicy('host.themes.resolver', themeStateFor(runtime).runtime.mode, themeStateFor(runtime).runtime.slices)
+  try {
+    assertCapabilityShadowPolicy('host.themes.resolver', themeStateFor(runtime).runtime.mode, themeStateFor(runtime).runtime.slices)
+  } catch {
+    return undefined
+  }
   let normalized: string | undefined
   try {
     normalized = normalizeRuntimeName(name)

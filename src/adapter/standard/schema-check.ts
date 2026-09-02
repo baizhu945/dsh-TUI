@@ -111,6 +111,9 @@ export function check(value: unknown, schema: JsonSchema, rootSchema: JsonSchema
   }
   if (schema.type === 'array') {
     if (!Array.isArray(value)) throw new Error(`${where}: expected array`)
+    if (schema.items === undefined) {
+      throw new Error(`${where}: array schema must declare items`)
+    }
     if (schema.minItems !== undefined && value.length < (schema.minItems as number)) {
       throw new Error(`${where}: too few items`)
     }

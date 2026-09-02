@@ -293,7 +293,11 @@ function shortcutStateFor(runtime: TuiShortcutRuntime): ShortcutState {
 }
 
 function dispatchShortcut(runtime: TuiShortcutRuntime, input: string, key: TuiShortcutKey): boolean {
-  assertCapabilityShadowPolicy('host.shortcuts.dispatch', shortcutStateFor(runtime).runtime.mode, shortcutStateFor(runtime).runtime.slices)
+  try {
+    assertCapabilityShadowPolicy('host.shortcuts.dispatch', shortcutStateFor(runtime).runtime.mode, shortcutStateFor(runtime).runtime.slices)
+  } catch {
+    return false
+  }
   const state = shortcutStateFor(runtime)
   for (const entry of state.shortcuts.values()) {
     if (!matchShortcut(entry.combo, input, key)) continue

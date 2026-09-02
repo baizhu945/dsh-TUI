@@ -17,12 +17,14 @@ import type { CursorDeclaration, CursorDeclarationSetter } from './components/Cu
 import { FRAME_INTERVAL_MS, PTY_BACKLOG_BYTES } from './constants.js';
 import * as dom from './dom.js';
 import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrameCause } from './geometry-trace.js';
+import { callWithUpdateOverflowGuard, installNestedUpdateOverflowProcessGuard } from './update-overflow-guard.js';
 import { KeyboardEvent } from './events/keyboard-event.js';
 import type { DragEvent } from './events/drag-event.js';
 import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
 import { dispatchClick, dispatchContextMenu, dispatchDragEvent as bubbleDragEvent, dispatchHover, dispatchWheel, findDragTarget, clearHovered, invalidateNoInterestRect } from './hit-test.js';
 import { logMouseDebug } from '../utils/debug.js';
+import { noteTerminalFlush } from './flush-tick.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
@@ -31,12 +33,12 @@ import { optimize } from './optimizer.js';
 import Output from './output.js';
 import type { ParsedKey } from './parse-keypress.js';
 import reconciler, { dispatcher, getLastCommitMs, getLastYogaMs, isDebugRepaintsEnabled, recordYogaMs, resetProfileCounters } from './reconciler.js';
-import renderNodeToOutput, { consumeFollowScroll, didLayoutShift } from './render-node-to-output.js';
+import renderNodeToOutput, { consumeFollowScroll, consumeViewportResizes, didLayoutShift } from './render-node-to-output.js';
 import { applyPositionedHighlight, type MatchPosition, scanPositions } from './render-to-screen.js';
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './searchHighlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -315,6 +317,11 @@ export default class Ink {
     // onRecoverableError
     noop // onDefaultTransitionIndicator
     );
+    // #185 process backstop: the nested-update overflow can surface from any
+    // timer dispatch (not only the guarded hotspots), which would kill the
+    // process. React resets the counter before throwing, so absorbing the
+    // error class process-wide is safe — see update-overflow-guard.ts.
+    installNestedUpdateOverflowProcessGuard();
     if (process.env.NODE_ENV === 'development') {
       reconciler.injectIntoDevTools({
         bundleType: 0,
@@ -652,6 +659,66 @@ export default class Ink {
     });
     const rendererMs = performance.now() - renderStart;
 
+    // Viewport-shrink translation (companion to the follow block below):
+    // chrome mounting around a ScrollBox (the new-messages pill, the sticky
+    // prompt header, the working spinner, prompt growth) moves the viewport
+    // edges with NO scroll delta, so no followScroll event fires and the
+    // block below never sees it. The selection endpoints are screen-buffer
+    // rows; unhandled, the anchor strands BELOW the shrunken viewport —
+    // pickFollowForSelection then rejects every follow event (anchor
+    // outside the viewport) and wheel tracking silently dies, leaving the
+    // highlight pinned to the chrome row: copy-on-select grabs the chrome
+    // text itself (the "↓ 回到底部" pill leaking into bottom-to-top copies)
+    // and the rows that scrolled under the dead highlight never reach the
+    // scrolledOff accumulators. Capture the covered band from the PREVIOUS
+    // frame's screen (frontFrame — the swap is below) and re-clamp the
+    // endpoints BEFORE the follow pick, so the clamped anchor is in-viewport
+    // and this frame's wheel drain translates normally.
+    const viewportResizes = consumeViewportResizes();
+    if (viewportResizes.length > 0 && this.selection.anchor) {
+      const resize = pickFollowForSelection(
+        viewportResizes,
+        this.selection.anchor.row,
+      );
+      // Terminal resize rebuilds the screen at new dimensions; the
+      // selection's screen-buffer coords are stale against the previous
+      // frame's buffer and band capture would read garbage. Chrome-mount
+      // resizes (the target case) never change the terminal size.
+      if (
+        resize &&
+        this.frontFrame.screen.width === terminalWidth &&
+        this.frontFrame.screen.height === terminalRows
+      ) {
+        const hadSelection = hasSelection(this.selection);
+        if (resize.kind === 'translate') {
+          const cleared = shiftSelectionForViewportTranslation(
+            this.selection,
+            resize.rowDelta,
+            resize.prevTop,
+            resize.prevBottom,
+            resize.top,
+            resize.bottom,
+          );
+          if (cleared) for (const cb of this.selectionListeners) cb();
+        } else {
+          shiftSelectionForViewportResize(
+            this.selection,
+            this.frontFrame.screen,
+            resize.prevTop,
+            resize.prevBottom,
+            resize.top,
+            resize.bottom,
+          );
+          // Both-ends-covered clear must notify React-land so useHasSelection
+          // re-renders and the footer copy/escape hint disappears — direct
+          // listener fire (notifySelectionChange would re-enter onRender).
+          if (hadSelection && !hasSelection(this.selection)) {
+            for (const cb of this.selectionListeners) cb();
+          }
+        }
+      }
+    }
+
     // Sticky/auto-follow or wheel-drain scrolled one or more ScrollBoxes
     // this frame. Translate the selection by the same delta so the highlight
     // stays anchored to the TEXT (native terminal behavior — the
@@ -702,9 +769,16 @@ export default class Ink {
       // each shift branch so the pairing can't be broken by a new guard.
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
+          // Record the viewport bounds for finishSelection's deferred
+          // commit-time check: the in-flight drag never clears (a wheel
+          // must not kill the gesture), so a drag that wheeled fully
+          // off-edge is dropped when it ENDS, not while it is running.
+          this.selection.dragBounds = { top: viewportTop, bottom: viewportBottom };
         }
-        shiftAnchor(this.selection, shift, viewportTop, viewportBottom);
+        // allowClear=false: both ends clamp to the edge; the ghost guard
+        // runs at release via dragBounds above.
+        shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom, false);
       } else if (
       // Flag-3 guard: the anchor check above only proves ONE endpoint is
       // on scrollbox content. A drag from row 3 (scrollbox) into the
@@ -715,12 +789,12 @@ export default class Ink {
       // straddling selection falls through to NEITHER shift NOR capture:
       // the footer endpoint pins the selection, text scrolls away under
       // the highlight, and getSelectedText reads the CURRENT screen
-      // contents — no accumulation. Dragging branch doesn't need this:
-      // shiftAnchor ignores focus, and the anchor DOES shift (so capture
-      // is correct there even when focus is in the footer).
+      // contents — no accumulation. Both endpoints are text-anchored in
+      // the active drag branch too, so a wheel cannot leave focus on the
+      // old screen row.
       !this.selection.focus || this.selection.focus.row >= viewportTop && this.selection.focus.row <= viewportBottom) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side);
+          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
         }
         const cleared = shiftSelectionForFollow(this.selection, shift, viewportTop, viewportBottom);
         // Auto-clear (both ends overshot an edge — off the top via
@@ -729,8 +803,8 @@ export default class Ink {
         // copy/escape hint disappears. notifySelectionChange() would
         // recurse into onRender; fire the listeners directly — they
         // schedule a React update for LATER, they don't re-enter this
-        // frame.
-        if (cleared) for (const cb of this.selectionListeners) cb();
+        // frame. (#185 self-heal guard: same as selection.notify.)
+        if (cleared) for (const cb of this.selectionListeners) callWithUpdateOverflowGuard('selection.notify', cb);
       }
     }
 
@@ -970,6 +1044,11 @@ export default class Ink {
     const tWrite = performance.now();
     writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
     const writeMs = performance.now() - tWrite;
+    // One frame reached the terminal. Components holding a widened mount
+    // window until its content is actually flushed (MessageList's paint
+    // expansion hold) key off this tick — a commit can be superseded before
+    // its frame flushes, so "mounted" alone must never unlock tightening.
+    noteTerminalFlush();
 
     // Update blit safety for the NEXT frame. The frame just rendered
     // becomes frontFrame (= next frame's prevScreen). If we applied the
@@ -1145,6 +1224,10 @@ export default class Ink {
         rows: this.terminalRows
       };
       this.resetFramesForAltScreen();
+      // Alt-screen reactivation is a safe boundary: the component just
+      // remounted, so no gesture can be in flight. Drain any deferred
+      // re-entry confirmed while the alt screen was inactive.
+      this.drainAltScreenReentry();
     } else {
       const saved = this.mainScreenFrameState;
       this.mainScreenFrameState = null;
@@ -1226,6 +1309,10 @@ export default class Ink {
     // blindly (idempotent) and re-enters alt only if the terminal answers
     // DECRPM with "1049 reset".
     this.probeAltScreenHealth();
+    // Drain any deferred re-entry: a >5s stdin gap is a safe boundary (no
+    // button can be held — the terminal would have sent motion events), and
+    // resume is exactly the moment a confirmed 1049 loss should heal.
+    this.drainAltScreenReentry();
     // Alt-screen re-entry — destructive (ERASE_SCREEN). Only for callers that
     // have a strong signal the terminal actually dropped mode 1049.
     if (includeAltScreen) {
@@ -1354,7 +1441,108 @@ export default class Ink {
    * left the app broken until the user gave up).
    */
   private lastHealthProbeAt = 0;
-  probeAltScreenHealth = (): void => {
+  /**
+   * True while a mouse button is held (press seen, no release/reset yet).
+   * Set by App via setPointerGestureActive. The health probe must not write
+   * while a gesture is in flight: the blind ENABLE_MOUSE_TRACKING re-assert
+   * mid-drag resets button tracking on some emulators (WezTerm, xterm.js
+   * family), silently killing the gesture's motion stream, and a DECRQM
+   * "1049 reset" reply resolving mid-drag would erase the screen under the
+   * user's pointer.
+   */
+  private pointerGestureActive = false;
+  /**
+   * Protocol-candidate latch: an SGR mouse prefix is in flight (parser hold
+   * or tokenizer incomplete buffer). Cleared by App on any complete event
+   * (mouse or key), ordinary text, paste/response boundary, or the 1s hold
+   * deadline. Distinct from pointerGestureActive: a split wheel report
+   * resolves to a ParsedKey (no physical button), and a stale candidate
+   * must not leave the probe permanently blocked.
+   */
+  private protocolCandidateActive = false;
+  /**
+   * Set when a DECRPM reply confirmed "1049 reset" while a gesture was
+   * latched. The re-entry (ENTER_ALT_SCREEN + ERASE_SCREEN + mouse
+   * re-assert) is destructive mid-drag — it erases the screen under the
+   * user's pointer and resets button tracking — so it is deferred to the
+   * gesture's end and drained by setPointerGestureActive(false).
+   */
+  private pendingAltScreenReentry = false;
+  /**
+   * Set when probeAltScreenHealth was blocked by an active gesture. The
+   * probe is retried at the release tail (drainAltScreenReentry) with the
+   * original caller's skipMouseReassert semantics.
+   */
+  private pendingProbeRequest: { skipMouseReassert?: boolean } | undefined = undefined;
+  setPointerGestureActive = (active: boolean): void => {
+    this.pointerGestureActive = active;
+    // Do NOT drain pendingAltScreenReentry here: the gesture latch clears at
+    // the START of release handling, but the destructive re-entry must wait
+    // until the full release/click/drag tail completes (dispatchClick reads
+    // frontFrame for cellIsBlank / getHyperlinkAt — reenterAltScreen resets
+    // those frames synchronously). App calls drainAltScreenReentry() after
+    // the release tail instead.
+  };
+  setProtocolCandidateActive = (active: boolean): void => {
+    this.protocolCandidateActive = active;
+  };
+  /**
+   * Execute a deferred alt-screen re-entry, if one was confirmed while a
+   * gesture was latched. Called by App after the release tail completes.
+   * Only clears the pending flag when the re-entry actually runs — a pause
+   * or alt-screen exit during the gesture keeps the recovery signal alive
+   * for the next safe boundary (resume, focus, or a later release).
+   */
+  drainAltScreenReentry = (): void => {
+    if (!this.pendingAltScreenReentry) return;
+    if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+    // Dual latch: never re-enter while a physical button is held OR while a
+    // protocol candidate (split SGR prefix) is in flight. The destructive
+    // re-entry (1049h + 2J + mouse DECSET) would erase the screen under the
+    // user's pointer and reset button tracking mid-drag, or corrupt a
+    // half-parsed report.
+    if (this.pointerGestureActive || this.protocolCandidateActive) return;
+    this.pendingAltScreenReentry = false;
+    this.reenterAltScreen();
+  };
+  /**
+   * Retry a health probe that was blocked by an active gesture. Called by
+   * App after the release tail completes, with the original caller's
+   * skipMouseReassert semantics preserved. The request is cleared ONLY
+   * after the probe actually writes — a throttle hit keeps it pending and
+   * schedules a retry once the 250ms window expires.
+   */
+  drainPendingProbe = (): void => {
+    const req = this.pendingProbeRequest;
+    if (!req) return;
+    // Dual latch: never probe while a physical button is held OR while a
+    // protocol candidate is in flight — the probe's DECSET/DECRQM writes
+    // would corrupt the stream.
+    if (this.pointerGestureActive || this.protocolCandidateActive) return;
+    const now = Date.now();
+    const throttleLeft = 250 - (now - this.lastHealthProbeAt);
+    if (throttleLeft > 0) {
+      // Still inside the throttle window: keep the request pending and
+      // schedule the retry for when the window closes. The timer is
+      // best-effort — a later drain (focus, release, resume) may fire
+      // first; the guard inside probeAltScreenHealth makes a duplicate
+      // harmless.
+      setTimeout(() => this.drainPendingProbe(), throttleLeft);
+      return;
+    }
+    this.pendingProbeRequest = undefined;
+    this.probeAltScreenHealth(req);
+  };
+  /**
+   * Combined drain for the release tail: re-entry first (destructive),
+   * then the blocked probe retry (may discover a new 1049 loss and
+   * schedule the NEXT re-entry).
+   */
+  drainReleaseTail = (): void => {
+    this.drainAltScreenReentry();
+    this.drainPendingProbe();
+  };
+  probeAltScreenHealth = (options?: { skipMouseReassert?: boolean }): void => {
     // Shutdown latch: during the dispose window after detachForShutdown
     // (up to the 5s fallback exit) stray input, focus, resize or a pending
     // DECRPM reply would otherwise re-write ENABLE_MOUSE_TRACKING AFTER the
@@ -1362,11 +1550,26 @@ export default class Ink {
     // the shell then echoes as SGR garbage (issue #522). isUnmounted is set
     // by detachForShutdown() before any cleanup sequence is written.
     if (this.isUnmounted) return;
+    // Dual latch: never write while a physical button is held OR while a
+    // protocol candidate (split SGR prefix) is in flight. The physical latch
+    // covers press→release; the candidate latch covers the window between
+    // the first byte of a report and its completion — a DECSET re-assert
+    // there corrupts the stream mid-parse.
+    if (this.pointerGestureActive || this.protocolCandidateActive) {
+      this.pendingProbeRequest = { ...options };
+      return;
+    }
     const now = Date.now();
     if (now - this.lastHealthProbeAt < 250) return;
     this.lastHealthProbeAt = now;
     if (!this.options.stdout.isTTY || this.isPaused || !this.altScreenActive) return;
-    if (this.altScreenMouseTracking) {
+    // Mouse-driven callers pass skipMouseReassert: the event that triggered
+    // the probe already proves tracking is alive, so the blind DECSET
+    // re-assert is pure risk near gestures — only the 1049 query below is
+    // worth sending (conpty can drop 1049 while mouse tracking survives;
+    // without a mouse-path probe a mouse-only user never recovers, since
+    // mouse input keeps lastStdinTime fresh and starves the >5s gap path).
+    if (this.altScreenMouseTracking && !options?.skipMouseReassert) {
       this.options.stdout.write(ENABLE_MOUSE_TRACKING);
     }
     const querier = this.app?.querier;
@@ -1381,9 +1584,20 @@ export default class Ink {
       // DECRPM status: 1/3 = set, 2/4 = reset, 0/undefined = unknown.
       // Heal only on a POSITIVE reset — an unanswered probe must not
       // trigger the destructive re-entry.
-      if (reply !== undefined && (reply.status === 2 || reply.status === 4)) {
-        this.reenterAltScreen();
+      if (reply === undefined || (reply.status !== 2 && reply.status !== 4)) return;
+      // The reply resolves asynchronously: focus/keyboard/resize issued the
+      // query, but a mouse press may have latched a gesture since (or a
+      // protocol candidate may be in flight). Re-entering now would erase
+      // the screen under the user's pointer and reset button tracking
+      // mid-drag — defer to the gesture's end instead.
+      if (this.pointerGestureActive || this.protocolCandidateActive) {
+        this.pendingAltScreenReentry = true;
+        return;
       }
+      // Same re-check for the wider world: the probe ran with alt-screen
+      // active, but an exit or editor handoff may have landed meanwhile.
+      if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+      this.reenterAltScreen();
     }).catch(() => {
       /* probe is best-effort; the next trigger retries */
     });
@@ -1391,7 +1605,14 @@ export default class Ink {
 
   /** Refocus = first observable moment after a conpty-side mode reset. */
   handleTerminalFocusProbe = (focused: boolean): void => {
-    if (focused) this.probeAltScreenHealth();
+    if (focused) {
+      this.probeAltScreenHealth();
+      // Refocus is a safe boundary: the OS delivered the focus event, so no
+      // button can be held (a held button would have generated motion or a
+      // release first). Drain any deferred re-entry confirmed while the
+      // window was unfocused.
+      this.drainAltScreenReentry();
+    }
   };
 
   /**
@@ -1692,7 +1913,11 @@ export default class Ink {
   }
   private notifySelectionChange(): void {
     this.renderNow();
-    for (const cb of this.selectionListeners) cb();
+    // #185 self-heal: selection listeners drive React state; an overflow
+    // throw resets React's nested counter, so absorb and keep the rest.
+    for (const cb of this.selectionListeners) {
+      callWithUpdateOverflowGuard('selection.notify', cb);
+    }
   }
 
   /**
@@ -1704,12 +1929,25 @@ export default class Ink {
    * The button byte is the raw SGR release code; its modifier bits land
    * on ClickEvent.shift/alt/ctrl.
    */
-  dispatchClick(col: number, row: number, button = 0): boolean {
-    // Interaction-level health probe: the first click after a conpty-side
-    // mode drop triggers the heal (probe is throttled + no-op on healthy
-    // screens). Runs before the gate so a dropped 1049 is re-entered
-    // within a round trip instead of the click silently missing.
-    this.probeAltScreenHealth();
+  /** Batch-tail probe for release-path clicks that deferred via deferProbe. */
+  clickProbeAtBatchTail = (): void => {
+    this.probeAltScreenHealth({ skipMouseReassert: true });
+  };
+  dispatchClick(col: number, row: number, button = 0, deferProbe = false): boolean {
+    // Safe-boundary probe: clicks are dispatched from the RELEASE tail,
+    // after App cleared the gesture latch — no button is held here. A
+    // received mouse report proves tracking is alive but says nothing about
+    // mode 1049 (conpty drops them independently), and mouse input keeps
+    // lastStdinTime fresh so the >5s stdin-gap path never fires for a
+    // mouse-only user — without a mouse-path probe, a silently dropped
+    // alt-screen would never recover. skipMouseReassert: the arriving event
+    // already proves tracking, so only the DECRQM 1049 query is sent.
+    // deferProbe: release-path clicks defer the probe to the batch tail — a
+    // single stdin chunk can carry `release → next press`, and the probe
+    // must not write before the next press latch is established.
+    if (!deferProbe) {
+      this.probeAltScreenHealth({ skipMouseReassert: true });
+    }
     if (!this.altScreenActive) {
       logMouseDebug('dispatchClick skipped — alt screen inactive', { col, row });
       return false;
@@ -1728,7 +1966,10 @@ export default class Ink {
    * modifier bits land on ContextMenuEvent.shift/alt/ctrl.
    */
   dispatchContextMenu(col: number, row: number, button = 0): boolean {
-    this.probeAltScreenHealth();
+    // No probe: this runs at right-PRESS time, inside the gesture window
+    // (App latches before dispatching) — the probe would be latch-blocked
+    // here anyway. Recovery lives at the safe boundaries (click release,
+    // hover, wheel — see dispatchClick).
     if (!this.altScreenActive) {
       logMouseDebug('dispatchContextMenu skipped — alt screen inactive', { col, row });
       return false;
@@ -1751,7 +1992,11 @@ export default class Ink {
     deltaX = 0,
     button = 0,
   ): boolean {
-    this.probeAltScreenHealth();
+    // Safe-boundary probe (skipMouseReassert — see dispatchClick). Wheel is
+    // the recovery entry for mouse-only users on mode-1002-only terminals,
+    // where no-button hover motion never arrives: SGR wheel reports carry
+    // no held-button state and never engage the gesture latch.
+    this.probeAltScreenHealth({ skipMouseReassert: true });
     if (!this.altScreenActive) return false;
     const handled = dispatchWheel(this.rootNode, col, row, deltaY, deltaX, button);
     if (handled) {
@@ -1760,7 +2005,10 @@ export default class Ink {
     return handled;
   }
   dispatchHover(col: number, row: number): void {
-    this.probeAltScreenHealth();
+    // Safe-boundary probe (skipMouseReassert — see dispatchClick). Hover is
+    // no-button motion; App already cleared the gesture latch before routing
+    // here, so no button can be held.
+    this.probeAltScreenHealth({ skipMouseReassert: true });
     if (!this.altScreenActive) return;
     dispatchHover(this.rootNode, col, row, this.hoveredNodes);
   }
@@ -1773,7 +2021,13 @@ export default class Ink {
    * baseline selection/click path untouched.
    */
   findDragTargetAt(col: number, row: number): dom.DOMElement | null {
-    this.probeAltScreenHealth();
+    // No probe: this runs AT PRESS TIME, inside the gesture window — a
+    // probe here writes the blind ENABLE_MOUSE_TRACKING re-assert + DECRQM
+    // query while the user is holding the button, and some emulators
+    // (WezTerm, xterm.js family) reset button tracking on DECSET re-assert,
+    // killing the drag's motion stream mid-gesture (field-confirmed: drags
+    // intermittently produced zero motion events). Recovery lives at the
+    // safe boundaries (see dispatchClick).
     if (!this.altScreenActive) return null;
     const target = findDragTarget(this.rootNode, col, row);
     logMouseDebug('findDragTargetAt', { col, row, found: Boolean(target) });
@@ -1785,7 +2039,9 @@ export default class Ink {
    * dispatchClick.
    */
   dispatchDrag(target: dom.DOMElement, event: DragEvent): void {
-    this.probeAltScreenHealth();
+    // No probe: dragmove IS mid-gesture by definition (gesture latched) —
+    // a re-assert write here kills the very motion stream that feeds it
+    // (see dispatchClick for the safe-boundary probes).
     if (!this.altScreenActive) return;
     logMouseDebug('dispatchDrag', { type: event.type, col: event.col, row: event.row });
     bubbleDragEvent(target, event);
@@ -1987,7 +2243,7 @@ export default class Ink {
   }
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           {node}
         </TerminalWriteProvider>

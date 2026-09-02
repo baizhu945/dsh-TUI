@@ -96,6 +96,7 @@ export class TuiStatusStore {
   }
 
   subscribe(listener: () => void): () => void {
+    if (typeof listener !== 'function') return () => {}
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
@@ -103,7 +104,15 @@ export class TuiStatusStore {
   }
 
   private emit(): void {
-    for (const listener of this.listeners) listener()
+    for (const listener of [...this.listeners]) {
+      try {
+        listener()
+      } catch (error) {
+        // One throwing plugin listener must not break status updates for the
+        // other activations or leave the store partially emitted.
+        console.error('dsh-tui: tuiStatus listener failed', error)
+      }
+    }
   }
 }
 

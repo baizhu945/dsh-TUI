@@ -2050,7 +2050,7 @@ export function createChannel(
    *  sessions already carry their own durable permission events, while the
    *  host service's `defaultPreset` is a deployment fallback rather than the
    *  user's last interactive choice. */
-  const applyPreferredPermission = (freshSession = false): void => {
+  const applyPreferredPermission = (target: Agent, freshSession = false): void => {
     if (options.freshSession !== true && !freshSession) return
     const preferred = readPermissionPref()
     if (preferred === undefined) return
@@ -2063,7 +2063,7 @@ export function createChannel(
     if (!Array.isArray(service?.names) || !service.names.includes(preferred) || typeof service.set !== 'function') return
     applyingPreferredPermission = true
     try {
-      service.set(agent.session, preferred)
+      service.set(target.session, preferred)
     } catch {
       // A stale preset or an unavailable host writer must not prevent boot;
       // the service's configured default remains in force for this session.
@@ -5329,7 +5329,7 @@ export function createChannel(
       const previousSessionId = String(agent.session.id)
       agent = handle.agent
       currentHandle = handle
-      applyPreferredPermission(true)
+      applyPreferredPermission(agent, true)
       bindAgent()
       refreshCommandList()
       void refreshLoadedContext()
@@ -6404,6 +6404,7 @@ export function createChannel(
         state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }
       }
+      applyPreferredPermission(handle.agent, true)
       backgroundHandles.set(String(sessionId), handle)
       // Record ownership BEFORE delivery: even a delivery failure must not
       // silently drop the session from the view.
@@ -6541,6 +6542,7 @@ export function createChannel(
       } catch {
         // Optional ledger, same as dispatch.
       }
+      applyPreferredPermission(handle.agent, true)
       const previousHandle = currentHandle
       const previousSessionId = String(agent.session.id)
       // CC parity: even an EMPTY session is backgrounded (it shows as a
@@ -8700,7 +8702,7 @@ ${output}
       model: state.model,
     }
   })
-  applyPreferredPermission()
+  applyPreferredPermission(agent)
   bindAgent()
   // Cordis owns the Channel lifetime. Rebinding handles the common case;
   // this effect closes the final timer when the Channel's context unloads.

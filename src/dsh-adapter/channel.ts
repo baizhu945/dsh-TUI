@@ -199,7 +199,7 @@ const PERMISSION_PRESET_DESCRIPTION_CELLS = 400
 
 type PermissionPresetService = {
   names?: unknown
-  current?: (events: readonly SessionEvent[]) => unknown
+  current?: (session: { events: readonly SessionEvent[] }) => unknown
   optionOf?: (name: string) => unknown
 }
 
@@ -261,16 +261,14 @@ function normalizePermissionPresetOption(value: unknown): PermissionPresetOption
 
 function permissionPresetSnapshotFromService(
   service: unknown,
-  events: readonly SessionEvent[],
+  session: { events: readonly SessionEvent[] },
 ): PermissionPresetSnapshot {
   if (!isRecord(service)) return unavailablePermissionPresetSnapshot()
   const runtime = service as PermissionPresetService
   try {
     const capturedNames = runtime.names
-    const current = runtime.current
-    const optionOf = runtime.optionOf
     if (!Array.isArray(capturedNames) || capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
-    if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
+    if (typeof runtime.current !== 'function' || typeof runtime.optionOf !== 'function') return unavailablePermissionPresetSnapshot()
 
     const names = [...capturedNames]
     const seen = new Set<string>()
@@ -283,16 +281,16 @@ function permissionPresetSnapshotFromService(
 
     const options: PermissionPresetOption[] = []
     for (const name of names) {
-      const option = normalizePermissionPresetOption(optionOf(name))
+      const option = normalizePermissionPresetOption(runtime.optionOf(name))
       if (option === undefined || option.value !== name) return unavailablePermissionPresetSnapshot()
       options.push({ ...option })
     }
 
-    const currentValue = current(events)
+    const currentValue = runtime.current(session)
     if (typeof currentValue !== 'string' || (currentValue !== PERMISSION_PRESET_CUSTOM && !seen.has(currentValue))) {
       return unavailablePermissionPresetSnapshot()
     }
-    const currentOption = normalizePermissionPresetOption(optionOf(currentValue))
+    const currentOption = normalizePermissionPresetOption(runtime.optionOf(currentValue))
     if (currentOption === undefined || currentOption.value !== currentValue) return unavailablePermissionPresetSnapshot()
     if (currentValue !== PERMISSION_PRESET_CUSTOM) {
       const rosterOption = options.find(option => option.value === currentValue)
@@ -5622,7 +5620,7 @@ export function createChannel(
         return unavailablePermissionPresetSnapshot()
       }
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
-      return permissionPresetSnapshotFromService(service, agent.session.events)
+      return permissionPresetSnapshotFromService(service, agent.session)
     },
     /** Localized roster projection for the /preset picker — resolves
      *  built-in display text through the dictionary under `en`; the

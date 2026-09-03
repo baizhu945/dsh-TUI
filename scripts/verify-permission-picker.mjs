@@ -51,13 +51,21 @@ const specs = {
 
 const permissionPresets = {
   names: Object.keys(specs),
-  /** Return the selected preset for the exact live session object. */
+  /**
+   * Return the selected preset for the exact live session object.
+   * @param currentSession - The session supplied by the channel adapter.
+   * @returns The current fixture preset id.
+   */
   current(currentSession) {
     assert.equal(currentSession, session, 'permission current() receives the live session')
     return this.currentValue
   },
   currentValue: 'confirm',
-  /** Build one display row while requiring the service receiver. */
+  /**
+   * Build a display row while requiring the service receiver.
+   * @param name - The preset id to describe.
+   * @returns The display row for the requested preset.
+   */
   optionOf(name) {
     const spec = this.specs[name]
     if (spec === undefined) throw new Error(`unknown fixture preset: ${name}`)
@@ -67,7 +75,10 @@ const permissionPresets = {
 }
 
 const commands = {
-  /** Expose the registry command descriptor to the channel fixture. */
+  /**
+   * Expose the registry command descriptor to the channel fixture.
+   * @returns The permission command descriptor list.
+   */
   list() {
     return [{ name: 'permission', description: 'Switch the permission preset', input: { hint: '<preset>' } }]
   },
@@ -76,7 +87,11 @@ const commands = {
 const ctx = {
   /** Register no listeners in this synchronous fixture. */
   on: () => () => {},
-  /** Return only the services needed by this focused channel fixture. */
+  /**
+   * Return only the services needed by this focused channel fixture.
+   * @param name - The requested service name.
+   * @returns The matching fixture service, if any.
+   */
   get(name) {
     if (name === 'commands') return commands
     return name === 'permissionPresets' ? permissionPresets : undefined

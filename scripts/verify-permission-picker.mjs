@@ -15,11 +15,23 @@ import assert from 'node:assert/strict'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 
 const session = { id: 'permission-picker-session', seq: 0, events: [] }
+
+/** Dispose the no-op listener registration. */
+function noopUnsubscribe() {}
+
+/** Register no listeners in this synchronous fixture. */
+function noopOn() {
+  return noopUnsubscribe
+}
+
+/** Discard channel warning messages in this synchronous fixture. */
+function noopWarn() {}
+
 const agent = {
   id: 'permission-picker-agent',
   status: 'idle',
   session,
-  ctx: { on: () => () => {} },
+  ctx: { on: noopOn },
 }
 
 const specs = {
@@ -85,8 +97,7 @@ const commands = {
 }
 
 const ctx = {
-  /** Register no listeners in this synchronous fixture. */
-  on: () => () => {},
+  on: noopOn,
   /**
    * Return only the services needed by this focused channel fixture.
    * @param name - The requested service name.
@@ -96,7 +107,7 @@ const ctx = {
     if (name === 'commands') return commands
     return name === 'permissionPresets' ? permissionPresets : undefined
   },
-  logger: { warn() {} },
+  logger: { warn: noopWarn },
 }
 
 const channel = createChannel(ctx, agent, {

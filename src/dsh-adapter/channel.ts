@@ -5623,7 +5623,10 @@ export function createChannel(
       state.notify(t('activity-indicator-switched', { name }))
       return true
     },
-    /** Return the validated permission-preset roster for the live session. */
+    /**
+     * Return the validated permission-preset roster for the live session.
+     * @returns The current registry-backed permission snapshot.
+     */
     permissionPresets() {
       let service: unknown
       try {

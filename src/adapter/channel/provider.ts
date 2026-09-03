@@ -173,7 +173,6 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
 
   return Object.freeze({
     async open(input: ChannelProviderOpenInput): Promise<TuiChannelSnapshot> {
-      closed = false
       validateTuiChannelInput('open', {
         ...input,
         ...(input.options === undefined ? {} : { options: input.options }),
@@ -186,6 +185,7 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
         || (input.sessionId !== undefined && input.sessionId !== '')) {
         throw new Error('REPLAY_PROVIDER_UNSUPPORTED_SELECTOR: replay provider does not resolve workspace/sessionId selectors')
       }
+      closed = false
       return latest()
     },
     async subscribe(

@@ -111,17 +111,16 @@ export function check(value: unknown, schema: JsonSchema, rootSchema: JsonSchema
   }
   if (schema.type === 'array') {
     if (!Array.isArray(value)) throw new Error(`${where}: expected array`)
-    if (schema.items === undefined) {
-      throw new Error(`${where}: array schema must declare items`)
-    }
     if (schema.minItems !== undefined && value.length < (schema.minItems as number)) {
       throw new Error(`${where}: too few items`)
     }
     if (schema.maxItems !== undefined && value.length > (schema.maxItems as number)) {
       throw new Error(`${where}: too many items`)
     }
-    for (let i = 0; i < value.length; i++) {
-      check(value[i], schema.items as JsonSchema, rootSchema, `${where}[${i}]`)
+    if (schema.items !== undefined) {
+      for (let i = 0; i < value.length; i++) {
+        check(value[i], schema.items as JsonSchema, rootSchema, `${where}[${i}]`)
+      }
     }
     if (schema.uniqueItems === true) {
       const encoded = value.map(canonicalJson)

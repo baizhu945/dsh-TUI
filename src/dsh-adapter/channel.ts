@@ -259,6 +259,17 @@ function normalizePermissionPresetOption(value: unknown): PermissionPresetOption
   }
 }
 
+/**
+ * Read and validate the host permission-preset registry for the live session.
+ *
+ * The registry methods are receiver-bound service methods, so they must be
+ * invoked through `runtime` rather than extracted into bare callbacks.
+ *
+ * @param service - The optional host-provided permission-preset service.
+ * @param session - The live DSH session whose effective preset is displayed.
+ * @returns A validated runtime snapshot, or an unavailable snapshot when the
+ *   host service does not satisfy the compatibility contract.
+ */
 function permissionPresetSnapshotFromService(
   service: unknown,
   session: { events: readonly SessionEvent[] },

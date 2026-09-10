@@ -158,9 +158,6 @@
 - id: tool-skill
   disabled: true
 
-- id: tool-str-replace-editor
-  disabled: true
-
 # Delegation tools (subagent spawn/fork, controls, workflows) are preset rows
 # now; the preset's `delegation` group re-adds them with package defaults, so
 # the former TUI's depth-1 cap no longer applies.

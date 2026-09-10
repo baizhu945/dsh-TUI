@@ -25,7 +25,7 @@ const minimal = filterMinimalPresetTools(assembly, 'minimal')
 assert.deepEqual(minimal.tools.map(tool => tool.name), ['bash', 'str_replace_editor'])
 assert.notEqual(minimal, assembly)
 
-for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined]) {
+for (const preset of ['standard', 'ptc', 'cordis', undefined]) {
   assert.equal(filterMinimalPresetTools(assembly, preset), assembly)
 }
 

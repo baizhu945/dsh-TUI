@@ -177,9 +177,8 @@ pnpm build
 pnpm smoke
 ```
 
-本仓库有三个子模块，其中 `vendor/dsh-std` 与 `dsh-auth` 是安装必需
-（`pnpm-workspace.yaml` 把 `vendor/dsh-std/packages/*` 列为 workspace 包，
-`dsh-auth` 经 `link:` 引入）。漏掉 `--recurse-submodules` 会让这两个目录为空，
+本仓库包含 `vendor/dsh-std` 子模块（其 `packages/*` 是
+`pnpm-workspace.yaml` 中的 workspace 包）。漏掉 `--recurse-submodules` 会让该目录为空，
 `pnpm install --frozen-lockfile` 直接失败。已经克隆过的检出补一条：
 
 ```sh

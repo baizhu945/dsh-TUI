@@ -97,8 +97,6 @@ const dict = {
   'preset-desc-code': { zh: '具备标准模式的全部能力，并通过 Code Mode SDK 呈现工具，让模型用一个 TypeScript 程序组合多步操作。', en: 'Everything standard mode offers, with tools exposed through the Code Mode SDK so the model composes multi-step operations in one TypeScript program.' },
   'preset-name-cordis': { zh: '创造模式', en: 'Creation' },
   'preset-desc-cordis': { zh: '用于创建自定义 Agent preset：具备标准模式的全部能力，并提供运行时检查、插件实验和 preset 创作指导。', en: 'For authoring custom agent presets: everything standard mode offers plus runtime inspection, plugin experiments and preset-authoring guidance.' },
-  'preset-name-liangshen': { zh: '梁神模式', en: 'Liangshen mode' },
-  'preset-desc-liangshen': { zh: '主 Agent 与子 Agent 首轮均保持 Minimal 双工具，首次工具调用后开放完整目录，压缩后重新锚定。', en: 'Root and delegated agents keep the minimal two-tool pair on the first turn; the full catalog opens after the first tool call and re-anchors after compaction.' },
   'mcp-none-configured': { zh: '未配置 MCP 服务器。', en: 'No MCP servers configured.' },
   'mcp-insert-hint': { zh: '在 profile 补丁层（~/.dsh/profiles/dsh-tui/cordis.patch.yml）insert 一行即可，例：', en: 'Insert one line in the profile patch layer (~/.dsh/profiles/dsh-tui/cordis.patch.yml), e.g.:' },
   'mcp-readme-hint': { zh: '详见仓库 README 的 MCP 章节。', en: 'See the MCP section of the repo README.' },

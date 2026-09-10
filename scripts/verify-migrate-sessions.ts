@@ -33,7 +33,7 @@ try {
   let sourceEvents: readonly unknown[] = []
   try {
     assert.ok(await settled(() => ctx.get('sessionPersistence') !== undefined))
-    const s = LegacySession.create('source' as never, [], { id: 'source' as never, version: 0, createdAt: 1, cwd: root, agentPreset: 'liangshen' })
+    const s = LegacySession.create('source' as never, [], { id: 'source' as never, version: 0, createdAt: 1, cwd: root, agentPreset: 'custom' })
     s.append('turn/start', { turn: 1 })
     s.append('step/start', { turn: 1, step: 1 })
     s.append('user/message', { id: 'user-message', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'migrate this question' }] } as never, { surfaceOp: 'append' })
@@ -69,7 +69,7 @@ try {
       const handle = await dst.sessionPersistence.open(SessionId(id), 'read')
       try {
         assert.equal(handle.header.version, 3)
-        assert.equal(handle.header.agentPreset, 'liangshen')
+        assert.equal(handle.header.agentPreset, 'custom')
         const { events, eventState } = await handle.read()
         const restored = Session.fromRestore(handle.id, events, handle.header, handle.inheritedEventCount, eventState)
         assert.deepEqual(restored.deriveMessages().map(message => message.content[0]?.type === 'text' ? message.content[0].text : ''), [

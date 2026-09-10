@@ -38,7 +38,7 @@ const { SubagentActivityStore } = await import('../src/dsh-adapter/subagents.js'
 function session(id: string, parent?: Session) {
   const seed = parent?.snapshotEvents() ?? []
   return Session.create(SessionId(id), seed, {
-    version: 3, id: SessionId(id), createdAt: 1, cwd, agentPreset: 'liangshen', isSeeded: parent !== undefined,
+    version: 3, id: SessionId(id), createdAt: 1, cwd, agentPreset: 'custom', isSeeded: parent !== undefined,
     ...(parent === undefined ? {} : { parentSession: parent.id, isSeeded: true }),
   }, SessionLogOffset(seed.length))
 }
@@ -222,7 +222,7 @@ try {
       try { await writer.append(s.snapshotEvents()); await writer.flush() }
       finally { await writer.close() }
     }
-    assert.equal(await resolvePersistedPreset(ctx, grandchild.id), 'liangshen')
+    assert.equal(await resolvePersistedPreset(ctx, grandchild.id), 'custom')
     assert.deepEqual(await resolvePersistedRoute(ctx, grandchild.id), { provider: 'deepseek', model: 'saved-model' })
     const grandchildPath = await locateSession(store as never, String(grandchild.id))
     assert.ok(grandchildPath)
@@ -245,7 +245,7 @@ try {
         }, close: async () => { closed++ } }
       } }, parent.id)
       if (fail) await assert.rejects(read, /read failed/)
-      else assert.equal((await read).meta.agentPreset, 'liangshen')
+      else assert.equal((await read).meta.agentPreset, 'custom')
     }
     assert.equal(closed, 2, 'handles close on success and failure')
     assert.equal((await readPersistedSession({ load: async () => ({ meta: parent.header, events: parent.snapshotEvents() }) }, parent.id)).meta.id, parent.id)

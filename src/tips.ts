@@ -304,13 +304,7 @@ export const TIPS: readonly Tip[] = [
     id: 'cmd-preset',
     group: 'commands',
     zh: '/preset 切换 agent 预设（standard/ptc 等）',
-    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
-  },
-  {
-    id: 'cmd-preset-liangshen',
-    group: 'commands',
-    zh: '/preset liangshen 梁神模式：首轮最小工具，之后全开',
-    en: '/preset liangshen starts minimal, then opens up',
+    en: '/preset switches presets: standard/ptc/minimal/cordis',
   },
   {
     id: 'cmd-settings',

@@ -44,7 +44,7 @@ const env = {
   DSH_HOME: targetHome,
   DSH_TUI_SESSION_ROOT: join(root, 'sessions'),
   DSH_TUI_WORKSPACE_TARGET: process.cwd(),
-  DSH_TUI_PRESET: 'liangshen',
+  DSH_TUI_PRESET: 'standard',
   DSH_TUI_LANG: 'zh',
   DSH_TELEMETRY_MODE: 'DISABLED',
   NODE_ENV: 'production',

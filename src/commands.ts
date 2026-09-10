@@ -66,7 +66,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'jobs', description: 'Show background jobs of this session' },
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
-  { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },
+  { name: 'preset', description: 'Switch the agent preset' },
   { name: 'theme', description: 'Switch the color theme (auto, built-in or custom)' },
   { name: 'color', description: 'Set the current session accent color' },
   { name: 'lang', description: 'Switch the UI language (en / zh)' },

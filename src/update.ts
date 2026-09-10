@@ -1355,9 +1355,10 @@ export async function updateTui(
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
-  // build scripts (ERR_PNPM_IGNORED_BUILDS). The dsh-auth chain pulls in
-  // postinstall-only deps (@google/genai/protobufjs via pi-ai), so pre-seed
-  // the profile workspace with explicit `false` entries before pnpm runs.
+  // build scripts (ERR_PNPM_IGNORED_BUILDS). Some model/credential
+  // dependencies pull in postinstall-only packages
+  // (@google/genai/protobufjs via pi-ai), so pre-seed the profile workspace
+  // with explicit `false` entries before pnpm runs.
   const allowBuilds = ensureProfileAllowBuilds(profile)
   if (allowBuilds !== undefined && allowBuilds.added.length > 0) {
     process.stderr.write(

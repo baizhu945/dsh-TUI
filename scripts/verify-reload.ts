@@ -151,7 +151,7 @@ const BASE = {
     check('读取本身不做不可逆改写', JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
     check('0.1.2 名册解析后迁移为 ptc', migratePresetPref('code', 'ptc', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'ptc')
     check('rc 写入 code 仍保存 code', writePresetPref('code', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
-    check('自定义 preset id 保持不变', parsePresetPref(JSON.stringify({ preset: 'liangshen' })) === 'liangshen')
+    check('自定义 preset id 保持不变', parsePresetPref(JSON.stringify({ preset: 'custom' })) === 'custom')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

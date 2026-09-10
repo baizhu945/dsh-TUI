@@ -13,41 +13,26 @@ const temporary = await mkdtemp(join(tmpdir(), 'dsh-tui-presets-'))
 try {
   assert.equal(packagedPresetRoot(), packagedRoot)
   const dshHome = join(temporary, 'home')
-  assert.deepEqual(ensurePackagedPresets({ dshHome, sourceRoot: packagedRoot }), [
-    { id: 'liangshen', status: 'installed' },
-  ])
-  assert.deepEqual(ensurePackagedPresets({ dshHome, sourceRoot: packagedRoot }), [
-    { id: 'liangshen', status: 'current' },
-  ])
+  assert.deepEqual(ensurePackagedPresets({ dshHome, sourceRoot: packagedRoot }), [])
+  assert.deepEqual(ensurePackagedPresets({ dshHome, sourceRoot: packagedRoot }), [])
 
   const discovered = await discoverPresets([
     { path: join(dshHome, '.agent-presets'), trust: 'user' },
   ], workspace)
-  const liangshen = discovered.find(preset => preset.id === 'liangshen')
-  assert.equal(liangshen?.name, '梁神模式')
-  assert.equal(liangshen?.broken, undefined)
+  assert.equal(discovered.some(preset => preset.id === 'liangshen'), false)
 
   const conflictingHome = join(temporary, 'conflicting-home')
-  const conflictingPreset = join(conflictingHome, '.agent-presets', 'liangshen')
+  const conflictingPreset = join(conflictingHome, '.agent-presets', 'custom')
   await mkdir(conflictingPreset, { recursive: true })
   await writeFile(join(conflictingPreset, 'keep.txt'), 'user-owned\n')
-  assert.deepEqual(ensurePackagedPresets({ dshHome: conflictingHome, sourceRoot: packagedRoot }), [
-    { id: 'liangshen', status: 'conflict' },
-  ])
+  assert.deepEqual(ensurePackagedPresets({ dshHome: conflictingHome, sourceRoot: packagedRoot }), [])
   assert.equal(await readFile(join(conflictingPreset, 'keep.txt'), 'utf8'), 'user-owned\n')
 
   const nextRoot = join(temporary, 'next')
   await cp(packagedRoot, nextRoot, { recursive: true })
-  const markerPath = join(nextRoot, 'liangshen', '.dsh-tui-managed.json')
-  const marker = JSON.parse(await readFile(markerPath, 'utf8'))
-  marker.revision = `${marker.revision}-test-update`
-  await writeFile(markerPath, `${JSON.stringify(marker, null, 2)}\n`)
-  assert.deepEqual(ensurePackagedPresets({ dshHome, sourceRoot: nextRoot }), [
-    { id: 'liangshen', status: 'updated' },
-  ])
-  assert.equal(JSON.parse(await readFile(join(dshHome, '.agent-presets', 'liangshen', '.dsh-tui-managed.json'), 'utf8')).revision, marker.revision)
+  assert.deepEqual(ensurePackagedPresets({ dshHome, sourceRoot: nextRoot }), [])
 } finally {
   await rm(temporary, { recursive: true, force: true })
 }
 
-console.log('packaged presets OK (install, discover, preserve conflict, update)')
+console.log('packaged presets OK (empty bundled roster, no Liangshen asset, user preset preservation)')

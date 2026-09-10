@@ -114,7 +114,6 @@ Each session composes its model-visible tools and prompt through
 | `ptc` (0.1.2) / `code` (legacy 0.1.1) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
 | `minimal` | Minimal | Persistent Bash and `str_replace_editor` only, without compaction |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
-| `liangshen` | Liangshen mode | Minimal's two-tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
 
 Usage rules:
 
@@ -122,7 +121,7 @@ Usage rules:
 - `/preset <id>` selects directly; `/preset status` reports the current state.
 - Picker names and descriptions come verbatim from each preset's `preset.yml`
   (written in Chinese). Under the `en` UI language (`/lang en`), the built-in
-  presets (`standard` / `minimal` / `code` / `cordis` / `liangshen`) show
+  presets (`standard` / `minimal` / `code` / `cordis`) show
   localized English names and descriptions; custom presets are shown as-is.
 - A blank session can switch in place. Once a conversation has started, the
   official blank-only rule stores the choice as the new default for `/new` or
@@ -135,14 +134,6 @@ Usage rules:
   preference, then the roster default `standard`.
 - Resuming a session restores the preset recorded in that session's log and
   does not overwrite it with the current default.
-- Liangshen mode ships with dsh-tui and is installed into the user preset root
-  at startup. An existing unmanaged directory with the same id is preserved.
-- Liangshen mode's first-round `bash` on Windows runs an auto-discovered Git
-  Bash: candidates are the installation tree of a `git.exe` found on PATH
-  (covers installer, portable, and Scoop layouts; Scoop shims are followed),
-  then conventional install roots and Scoop's conventional directories, then
-  bare `bash` on PATH — never accepting the System32 WSL launcher as Git Bash.
-  Set `DSH_TUI_LIANGSHEN_BASH_PATH` to an absolute `bash.exe` path to pin it
   explicitly (the pin is the only candidate; a miss warns and skips
   registration, exposing the full tool catalog on the first round).
 
@@ -240,8 +231,8 @@ restart. The first step picks an action:
   key cleanup failed, the wizard says so and points you at the store
   (the provider itself is gone).
 
-The **add** branch offers the following sources (the third appears only while
-the bundled dsh-auth plugin is mounted):
+The **add** branch offers the following sources (the third appears only while an
+external dsh-auth-style plugin is mounted):
 
 - **Built-in provider**: pick a catalog route (openai, anthropic, deepseek, …)
   from `llm.listConfigurableProviders()`; only the API key is required. The
@@ -251,14 +242,14 @@ the bundled dsh-auth plugin is mounted):
   protocol (`openai-completions` / `openai-responses` / `anthropic-messages`).
   The wizard probes the endpoint with the draft credential and offers the
   advertised models for selection (manual id entry as fallback).
-- **Subscription sign-in (OAuth)**: this option appears only while the bundled
-  dsh-auth plugin is mounted. Pick a subscription account (ChatGPT / Claude /
+- **Subscription sign-in (OAuth)**: this option appears only while an external
+  dsh-auth-style plugin is mounted. Pick a subscription account (ChatGPT / Claude /
   Grok, …) from the list and sign in through the browser / device-code flow —
   **no API key**. Every account carries a masked status line (signed in, with
   the token expiry, or expired); an already-signed-in account offers **Sign in
   again** (switch accounts or refresh the credential) and **Sign out** (remove
   the locally stored OAuth credential). Credential storage and route
-  registration belong to dsh-auth; `/auth status|login|logout` shares the same
+  registration belongs to that external plugin; `/auth status|login|logout` shares the same
   source. Without the plugin the option is absent and the wizard behaves
   exactly as before; with the plugin mounted but no OAuth-capable provider,
   the wizard says so.

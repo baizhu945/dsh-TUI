@@ -105,7 +105,6 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `ptc`（0.1.2）/ `code`（旧 0.1.1） | PTC 模式 | 标准能力，加 PTC SDK 呈现工具，可用 TypeScript 组合多步操作；两个名字可跨版本兼容解析 |
 | `minimal` | 极简模式 | 仅持久 Bash 与 `str_replace_editor`，不带 compaction |
 | `cordis` | 创造模式 | 标准能力，加运行时检查与插件实验工具 |
-| `liangshen` | 梁神模式 | 主 Agent 与子 Agent 首轮均保持 Minimal 双工具，首次工具调用后开放完整目录，压缩后重新锚定 |
 
 使用方式：
 
@@ -113,7 +112,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 - `/preset <id>` 直接选择；`/preset status` 查看当前状态。
 - 选择器显示的名称与描述取自各 preset 的 `preset.yml`（中文）。界面语言为
   `en`（`/lang en`）时，内置 preset（`standard` / `minimal` / `code` / `cordis` /
-  `liangshen`）显示本地化的英文名称与描述；自定义 preset 原样显示。
+  `cordis`）显示本地化的英文名称与描述；自定义 preset 原样显示。
 - 空白会话可以原地切换。已经产生对话的会话遵循官方 blank-only 规则，选择只会
   保存为新默认值，在 `/new` 或下一次启动时生效。
 - 默认值保存在 `~/.dsh-tui/agent-preset.json`。
@@ -122,13 +121,6 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 - 优先级为：显式 `config.preset` 或 `DSH_TUI_PRESET`，然后持久化偏好，最后名册
   默认值 `standard`。
 - 恢复旧会话时，以该会话日志记录的 preset 为准，不读取当前默认值覆盖它。
-- “梁神模式”随 dsh-tui 包发布，启动时安装到用户 preset 根目录；已有同名且并非
-  dsh-tui 托管的目录不会被覆盖。
-- 梁神模式在 Windows 的首轮 `bash` 通过自动发现的 Git Bash 执行：依次尝试 PATH 上的
-  `git.exe` 所在安装树（安装器/便携/Scoop 布局通用，会穿透 Scoop shim）、常规安装位置
-  与 Scoop 约定目录，最后兜底 PATH 上的裸 `bash`，且始终拒绝把 System32 的 WSL 启动器
-  当作 Git Bash。可用环境变量 `DSH_TUI_LIANGSHEN_BASH_PATH` 显式指定 `bash.exe` 绝对
-  路径（设置后即为唯一候选，找不到即告警并跳过注册，首轮直接放开完整工具目录）。
 
 自定义 preset 放在 `$DSH_HOME/.agent-presets/<name>/`，目录中应包含
 `agent.cordis.yml`。默认 `DSH_HOME` 下的路径即 `~/.dsh/.agent-presets/`。
@@ -222,12 +214,12 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 - **自定义 API 端点**：输入路由名、API key、baseURL 与协议
   （`openai-completions` / `openai-responses` / `anthropic-messages`），
   向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
-- **订阅账号登录（OAuth）**：仅当捆绑的 dsh-auth 插件挂载时多出该选项——从
+- **订阅账号登录（OAuth）**：仅当外部 dsh-auth-style 插件挂载时多出该选项——从
   向导列出的订阅账号（ChatGPT / Claude / Grok 等）中选择一个，走浏览器授权 /
   设备码流程用官方订阅登录，**无需 API key**；列表中每个账号都带遮蔽的登录态
   标注（已登录显示令牌到期时间，过期会注明），已登录的账号可选**重新登录**
   （换账号或刷新凭据）或**登出**（删除本地保存的 OAuth 凭据）。凭据存储与路由
-  注册由 dsh-auth 拥有，`/auth status|login|logout` 与此分支同源。未挂载
+  注册由外部插件拥有，`/auth status|login|logout` 与此分支同源。未挂载
   dsh-auth 时选项不出现，向导与之前完全一致；挂载了插件但没有可 OAuth 登录的
   provider 时会给出提示。
 

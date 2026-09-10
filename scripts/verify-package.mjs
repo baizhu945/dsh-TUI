@@ -41,13 +41,11 @@ const missing = [...targets].filter(target => !packed.has(target))
 if (missing.length > 0) {
   throw new Error(`package exports missing from tarball: ${missing.join(', ')}`)
 }
-for (const presetFile of [
-  'presets/liangshen/agent.cordis.yml',
-  'presets/liangshen/preset.yml',
-  'presets/liangshen/.dsh-tui-managed.json',
-  'presets/liangshen/tool-bootstrap.mjs',
-]) {
-  if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
+if ([...packed].some(path => path.startsWith('presets/liangshen/'))) {
+  throw new Error('npm package unexpectedly contains the removed presets/liangshen asset')
+}
+if ([...packed].some(path => path.includes('dsh-auth'))) {
+  throw new Error('npm package unexpectedly contains the removed dsh-auth bundle')
 }
 for (const path of packed) {
   const lower = path.toLowerCase()

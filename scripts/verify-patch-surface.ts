@@ -7,7 +7,7 @@
  * each baseline's package root so the snapshot records effective ownership,
  * not the raw YAML representation. The installed package is always checked; a
  * source-authoritative prerelease tree is checked too when present. CI sets
- * DSH_REQUIRE_ALPHA_BASELINE=1 so that baseline can never be skipped.
+ * DSH_REQUIRE_ALPHA_BASELINE=1 so that the rc.1 baseline can never be skipped.
  *
  * Run via `node --import tsx/esm scripts/verify-patch-surface.ts`.
  */
@@ -157,8 +157,8 @@ const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
 if (existsSync(sourceManifest) && existsSync(sourcePatch)) {
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   const source = baseline('source', sourceManifest, sourcePatch, resolver.baseUrl)
-  if (requireSourceBaseline && source.version !== '0.1.5-alpha.2') {
-    throw new Error(`required source baseline is 0.1.5-alpha.2, got ${source.version}`)
+  if (requireSourceBaseline && source.version !== '0.1.5-rc.1') {
+    throw new Error(`required source baseline is 0.1.5-rc.1, got ${source.version}`)
   }
   baselines.push(source)
 } else if (requireSourceBaseline) {

@@ -200,7 +200,11 @@ export function createPermissionIdentity(
       const runtime = permissionPresetRuntime(service)
       if (runtime !== undefined && typeof runtime.set === 'function') {
         try {
-          runtime.set(session, target)
+          // PermissionPresetService is a class in DSH rc.1. Preserve its
+          // receiver when using the service write fallback, otherwise a
+          // valid preset switch throws before the service can append its
+          // durable permission/preset event.
+          runtime.set.bind(service)(session, target)
         } catch (error) {
           ctx.logger.warn(
             `dsh-tui: permission mode "${target}" could not be applied by the permissionPresets service: ${error instanceof Error ? error.message : String(error)}`,

@@ -223,7 +223,15 @@ export function createPermissionModeActions(
     cycleMode,
     applyMode,
     onSessionEvent,
-    runPermissionPreset: name => permission.runPermissionPreset(name),
+    runPermissionPreset: async (name) => {
+      const ok = await permission.runPermissionPreset(name)
+      // A service write can be confirmed by its durable event/readback even
+      // when the host does not fan that event back through this channel's
+      // listener (notably the service-only fallback). Reconcile the visible
+      // mode after a successful public `/permission <preset>` action.
+      if (ok && owner.current()) refreshMode()
+      return ok
+    },
     permission,
   }
 }

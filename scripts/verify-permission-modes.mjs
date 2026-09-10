@@ -32,6 +32,7 @@ process.env.USERPROFILE = isolatedHome
 process.on('exit', () => rmSync(isolatedHome, { recursive: true, force: true }))
 
 const { createChannel } = await import('../lib/types/dsh-adapter/channel.js')
+const { permissionPresetSnapshotFromService } = await import('../lib/types/dsh-adapter/channel/permissions.js')
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -66,6 +67,7 @@ function makeEnv({ modes, names, bundles, history = [], permission = {}, withCom
   const appended = []
   const warnings = []
   const handlers = new Map()
+  const commandDefinitions = new Map()
   const events = [...history]
   let pendingPlan
   let publishing = false
@@ -135,11 +137,23 @@ function makeEnv({ modes, names, bundles, history = [], permission = {}, withCom
   const registry = new PermissionRegistry()
   const services = {
     planMode: { get: () => ({ pending: pendingPlan }) },
+    // The production command invoker is grant-gated. This fixture is about
+    // permission-preset routing, so provide the smallest host grant seam
+    // that lets the official `/permission` path reach the fake registry.
+    tuiPluginHost: { grants: { allows: () => true } },
     commands: {
       list: () => [],
       find: (_agent, name) => {
-        if (name === 'plan') return { name: 'plan', description: 'Toggle plan mode', handler() {} }
-        if (withCommand && name === 'permission') return { name: 'permission', description: 'Set permission preset', handler() {} }
+        if (name === 'plan' || (withCommand && name === 'permission')) {
+          if (!commandDefinitions.has(name)) {
+            commandDefinitions.set(name, {
+              name,
+              description: name === 'plan' ? 'Toggle plan mode' : 'Set permission preset',
+              handler() {},
+            })
+          }
+          return commandDefinitions.get(name)
+        }
         return undefined
       },
       execute: async (agent, line, _signal) => {
@@ -234,6 +248,53 @@ const AUTO_SEED = [
   env.events.push({ type: 'permission/preset', data: { preset: 'safe' } })
   check('earlier snapshot stays stable', first.current?.value === 'auto')
   check('next read observes the new state', channel.permissionPresets().current?.value === 'safe')
+}
+{
+  // Keep this registry deliberately class-based: DSH rc.1's real
+  // PermissionPresetService exposes prototype methods that require `this`.
+  // The custom entry mirrors the user's Web-only `confirm` preset and makes
+  // sure the adapter does not silently drop deployment-defined options.
+  let registry
+  class CustomPermissionRegistry {
+    names = ['workspace-write', 'danger-full-access', 'confirm']
+    entries = new Map([
+      ['workspace-write', { value: 'workspace-write', name: 'Workspace write' }],
+      ['danger-full-access', { value: 'danger-full-access', name: 'Full access' }],
+      ['confirm', {
+        value: 'confirm',
+        name: 'Confirm (ask)',
+        description: 'Full access, but every write and command asks for your approval',
+      }],
+    ])
+    current(subject) {
+      if (this !== registry) throw new Error('custom registry receiver lost')
+      return subject.events?.some(event => event.type === 'permission/preset' && event.data?.preset === 'confirm')
+        ? 'confirm'
+        : 'workspace-write'
+    }
+    optionOf(name) {
+      if (this !== registry) throw new Error('custom registry receiver lost')
+      return this.entries.get(name)
+    }
+    resolve(name) {
+      if (this !== registry) throw new Error('custom registry receiver lost')
+      return {
+        'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
+        'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+        confirm: { sandbox: 'danger-full-access', approval: 'ask' },
+      }[name]
+    }
+  }
+  registry = new CustomPermissionRegistry()
+  const snapshot = permissionPresetSnapshotFromService(registry, {
+    events: [{ type: 'permission/preset', data: { preset: 'confirm' } }],
+  })
+  check(
+    'custom confirm preset remains visible through a class registry',
+    snapshot.availability === 'runtime'
+      && snapshot.current?.value === 'confirm'
+      && snapshot.options.some(option => option.value === 'confirm' && option.name === 'Confirm (ask)'),
+  )
 }
 {
   const env = makeEnv({ noService: true })
@@ -351,23 +412,27 @@ const AUTO_SEED = [
   check('all-invalid roster warns', env.warnings.some(w => w.includes('unsafe permission identity')))
 }
 
-// ---- 8. local /permission entry surfacing ---------------------------------
+// ---- 8. /permission picker reachability -----------------------------------
 {
   const env = makeEnv({ noService: true })
   const channel = createChannel(env.ctx, env.agent, baseOptions)
-  check('no service → no TUI /permission entry', !channel.commandList.some(c => c.name === 'permission'))
+  check('no service → no runtime /permission picker', channel.permissionPresets().availability !== 'runtime')
 }
 {
   const env = makeEnv()
   const channel = createChannel(env.ctx, env.agent, baseOptions)
-  check('usable service → TUI surfaces a /permission entry', channel.commandList.some(c => c.name === 'permission' && !c.external))
+  const snapshot = channel.permissionPresets()
+  check(
+    'usable service → TUI has runtime /permission picker data',
+    snapshot.availability === 'runtime' && snapshot.options.some(option => option.value === 'safe'),
+  )
 }
 
 // ---- 9. no external command: service write fallback ------------------------
 {
   const env = makeEnv({ history: AUTO_SEED, withCommand: false })
   const channel = createChannel(env.ctx, env.agent, baseOptions)
-  check('entry still surfaced without the external command', channel.commandList.some(c => c.name === 'permission'))
+  check('picker data remains available without the external command', channel.permissionPresets().availability === 'runtime')
   const ok = await channel.runPermissionPreset('safe')
   check('typed switch resolves through the service write path', ok === true && channel.mode.id === 'permission:safe', `${ok} / ${channel.mode.id}`)
   check('no external command was attempted', env.commands.length === 0, JSON.stringify(env.commands))

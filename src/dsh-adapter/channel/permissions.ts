@@ -104,7 +104,13 @@ export function normalizePermissionPresetOption(value: unknown): PermissionPrese
  *  bundles (see `canonicalPresetFor`). */
 export function permissionBundlesFromService(service: unknown): readonly PermissionPresetBundle[] {
   const runtime = permissionPresetRuntime(service)
-  const resolve = runtime?.resolve
+  // PermissionPresetService is a class in DSH rc.1.  Keep the registry as
+  // the receiver when crossing the structural adapter boundary; extracting
+  // prototype methods and calling them as plain functions makes `this`
+  // undefined and falsely turns a usable runtime table into `unavailable`.
+  const resolve = typeof runtime?.resolve === 'function'
+    ? runtime.resolve.bind(service)
+    : undefined
   if (typeof resolve !== 'function') return []
   const names: readonly unknown[] = Array.isArray(runtime?.names) ? runtime.names : []
   const bundles: PermissionPresetBundle[] = []
@@ -140,8 +146,12 @@ export function permissionPresetSnapshotFromService(
   if (runtime === undefined) return unavailablePermissionPresetSnapshot()
   try {
     const capturedNames: readonly unknown[] = Array.isArray(runtime.names) ? runtime.names : []
-    const current = runtime.current as ((subject: unknown) => unknown) | undefined
-    const optionOf = runtime.optionOf
+    const current = typeof runtime.current === 'function'
+      ? runtime.current.bind(service) as (subject: unknown) => unknown
+      : undefined
+    const optionOf = typeof runtime.optionOf === 'function'
+      ? runtime.optionOf.bind(service) as (name: string) => unknown
+      : undefined
     if (capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
     if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
 

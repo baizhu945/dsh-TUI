@@ -276,6 +276,11 @@ function createChannelWithOwner(
   const configuredSessionModes = filteredConfiguredSessionModes.length > 0
     ? filteredConfiguredSessionModes
     : DEFAULT_SESSION_MODES
+  if (invalidConfiguredPermissionIds.length > 0) {
+    ctx.logger.warn(
+      `dsh-tui: session modes ${invalidConfiguredPermissionIds.map(id => `"${id}"`).join(', ')} declare an unsafe permission identity; dropped from the Shift+Tab cycle`,
+    )
+  }
   if (droppedModeIds.length > 0) {
     ctx.logger.warn(
       `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval/permission atom; dropped from the Shift+Tab cycle`,

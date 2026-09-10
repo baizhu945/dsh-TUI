@@ -68,7 +68,13 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
     const result: Record<string, unknown> = {}
     for (const key of Object.keys(effects) as (keyof T & string)[]) {
       const fn = target[key]
-      if (typeof fn !== 'function') throw new Error(`dsh-tui: missing Channel handle method ${key}`)
+      // Older/foreign host channels predate the optional performance seam.
+      // Keep them usable through the legacy Chat fallback; the native channel
+      // always supplies it.
+      if (typeof fn !== 'function') {
+        if (key === 'trajectory') continue
+        throw new Error(`dsh-tui: missing Channel handle method ${key}`)
+      }
       result[key] = (...args: unknown[]) => {
         check(effects[key])
         return settle(Reflect.apply(fn, target, args))
@@ -140,6 +146,11 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
         })
       }
       if (key === 'traceEvents') return trace(result, 0)
+      // Trajectory is an adapter-owned immutable projection. A structural
+      // read-view copy would walk every node/map in a long session on every
+      // channel version, defeating the event-time fold. Lifetime and shadow
+      // policy were checked above; keep the stable build identity here.
+      if (key === 'trajectory') return result
       if (key === 'agentViewRows' || key === 'settingsSections') return project(result)
       return settle(result)
     }

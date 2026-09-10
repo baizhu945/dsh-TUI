@@ -44,6 +44,7 @@ export function createLocalActions(deps: {
       state.rows.length = 0
       markChannelReadDirty(state.rows)
       rowIds.value = 0
+      state.rowsGeneration += 1
       projector.reset()
       subagents.dropRows()
       jobs.dropRows()

@@ -89,6 +89,7 @@ import { composePreset, runningPresetOf, serviceForAgent } from './presets.js'
 import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
 import { cleanRenderText } from './sanitize.js'
 import { getHostSceneRuntime, type TuiSceneRuntime } from './scenes.js'
+import { emptyTrajectory, extendTrajectory, extendTrajectoryEvents, type TrajBuild } from './trajectory/index.js'
 import {
   listSummaries,
   noteBranch,
@@ -158,6 +159,11 @@ function createChannelWithOwner(
   owner: ReturnType<typeof createChannelOwner>,
 ): ChannelState {
   const rowIds = { value: 0 }
+  // The trajectory is folded by the binding event router, not by Chat's
+  // render function. A long resumed session can contain tens of thousands of
+  // expanded chunk events; keeping this build warm here makes opening the UI
+  // independent of that event count.
+  let trajectoryBuild: TrajBuild = emptyTrajectory()
   const binding = createChannelBinding(initialAgent, options.handle, owner)
   // Detached work (/fork and agent-view dispatch) is owned until a caller
   // explicitly transfers the temporary handle to its destination ledger.
@@ -511,6 +517,9 @@ function createChannelWithOwner(
       // reads follow agent swaps (/resume /rewind /new) automatically.
       return snapshotLiveSessionEvents(binding.agent.session)
     },
+    trajectory() {
+      return trajectoryBuild
+    },
   }
 
   // Register the raw state before any specialist can synchronously publish a
@@ -634,6 +643,7 @@ function createChannelWithOwner(
     checkContextWarning, notify: (...args) => notify(...args),
     tools: ctx.get('tools') as ToolsRegistryLike | undefined, renderer: rendererRuntime,
     attachments: () => ctx.get('attachments'),
+    onStreamingChange: () => { state.rowsStreamingVersion += 1 },
   })
   localActions = createLocalActions({
     ctx,
@@ -738,6 +748,16 @@ function createChannelWithOwner(
     subagents: subagentProjection,
     agentView,
     messageObserver,
+    trajectory: {
+      rebuild(events) {
+        // The event router calls this once per binding, after replay has
+        // installed the new transcript and before live listeners are armed.
+        trajectoryBuild = extendTrajectory(null, events)
+      },
+      append(event) {
+        trajectoryBuild = extendTrajectoryEvents(trajectoryBuild, [event])
+      },
+    },
   })
   const bindAgent = bindingEvents.bind
 

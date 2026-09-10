@@ -107,7 +107,7 @@ import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { AgentView } from './AgentView.js'
-import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
+import { emptyTrajectory, extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
 import type { RawTrajEvent as SessionEvent } from '../adapter/ports/channel-view.js'
@@ -161,6 +161,7 @@ const STATUS_VIEW_UI = Object.freeze({
 
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
+const EMPTY_TRAJECTORY = emptyTrajectory()
 
 const COMMAND_RESULT_CELLS = 200
 
@@ -660,7 +661,34 @@ export function Chat({
   // The user starts a new message → the auto recap has served its purpose
   // (catching them up) and bows out. A newer user row is the signal; the
   // assistant's own streamed rows don't count.
-  const lastUserRowId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
+  // User rows are appended at the tail (folding only marks older rows), so
+  // keep the last-user lookup amortized O(1) across streaming renders. A
+  // session swap resets the scan once; later renders inspect only appended
+  // rows instead of filtering the whole transcript every frame.
+  const lastUserRowStateRef = React.useRef<{ agentId: string; scanned: number; id: number }>({
+    agentId: '',
+    scanned: 0,
+    id: -1,
+  })
+  const lastUserRowState = lastUserRowStateRef.current
+  let lastUserRowId = lastUserRowState.id
+  if (lastUserRowState.agentId !== channel.agentId || channel.rows.length < lastUserRowState.scanned) {
+    lastUserRowId = -1
+    for (let index = channel.rows.length - 1; index >= 0; index--) {
+      if (channel.rows[index]?.kind === 'user') {
+        lastUserRowId = channel.rows[index]!.id
+        break
+      }
+    }
+    lastUserRowStateRef.current = { agentId: channel.agentId, scanned: channel.rows.length, id: lastUserRowId }
+  } else if (channel.rows.length > lastUserRowState.scanned) {
+    for (let index = lastUserRowState.scanned; index < channel.rows.length; index++) {
+      const row = channel.rows[index]
+      if (row?.kind === 'user' && row.id > lastUserRowId) lastUserRowId = row.id
+    }
+    lastUserRowState.scanned = channel.rows.length
+    lastUserRowState.id = lastUserRowId
+  }
   React.useEffect(() => {
     if (
       recap !== null &&
@@ -2435,22 +2463,34 @@ export function Chat({
   }
 
   /**
-   * The session's trajectory projection, folded here rather than inside the
-   * scene.
-   *
-   * Two things fall out of owning it at this level: the status-line chip can
-   * show live counters without a second fold, and opening the scene is
-   * instant because the build is already warm. The fold is incremental — it
-   * consumes only events appended since the last render — so an idle
-   * conversation pays nothing for it.
+   * The real channel folds trajectory events at ingress. Legacy/headless
+   * hosts that only expose traceEvents keep a version-gated fallback so an
+   * animation render does not repeatedly touch the full event snapshot.
    */
-  const trajectoryRef = React.useRef<TrajBuild | null>(null)
-  trajectoryRef.current = extendTrajectory(
-    trajectoryRef.current,
-    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts render Chat with a partial channel
-    channel.traceEvents?.() ?? NO_EVENTS,
-  )
-  const trajectory = trajectoryRef.current
+  const trajectoryFallbackRef = React.useRef<{
+    version: number
+    events: readonly SessionEvent[]
+    build: TrajBuild
+  } | null>(null)
+  const channelTrajectory = typeof channel.trajectory === 'function'
+    ? channel.trajectory() as TrajBuild
+    : undefined
+  const trajectory = channelTrajectory ?? (() => {
+    const cached = trajectoryFallbackRef.current
+    if (cached !== null && cached.version === channel.version) return cached.build
+    const events = channel.traceEvents?.() ?? NO_EVENTS
+    if (cached !== null && cached.events === events) {
+      trajectoryFallbackRef.current = { version: channel.version, events, build: cached.build }
+      return cached.build
+    }
+    const build = events.length === 0
+      ? EMPTY_TRAJECTORY
+      : extendTrajectory(cached?.build ?? null, events)
+    trajectoryFallbackRef.current = { version: channel.version, events, build }
+    return build
+  })()
+  const trajectoryRef = React.useRef(trajectory)
+  trajectoryRef.current = trajectory
 
   /**
    * The status-line wake.
@@ -2477,7 +2517,7 @@ export function Chat({
     // The node array is mutated in place by the incremental fold, so its
     // length is the honest dependency; its identity never changes.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [trajectory.nodes, trajectory.counts.rows, wakeWidth],
+    [trajectory.nodes, trajectory.counts.rows, trajectory.revision, wakeWidth],
   )
   const [wakeTickRef, wakeTime] = useAnimationFrame(channel.working ? 120 : null)
   /**
@@ -2504,7 +2544,7 @@ export function Chat({
     }
     return null
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [channel.rows, channel.version, unreadFailures])
+  }, [trajectory.counts.errors, channel.agentId, unreadFailures])
 
   // Row seeking under layout virtualization: a mounted row seeks directly;
   // an unmounted one is force-mounted first, then sought by the completion
@@ -3729,6 +3769,8 @@ export function Chat({
         )}
         <MessageList
           rows={channel.rows}
+          streamingVersion={channel.rowsStreamingVersion}
+          rowsGeneration={channel.rowsGeneration}
           failureHintRowId={failureHintRowId}
           failureHint={t('traj-hint-failure', { key: `${modLabel}t` })}
           expanded={expanded}

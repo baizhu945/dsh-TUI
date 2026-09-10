@@ -17,6 +17,10 @@ export interface ChannelUi {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
   readonly rows: readonly ChatRow[]
+  /** Bumps only when an existing row's streaming flag flips in place. */
+  readonly rowsStreamingVersion: number
+  /** Transcript generation; row-id caches must be reset when it changes. */
+  readonly rowsGeneration: number
   readonly status: AgentStatus | 'starting' | 'disposed'
   readonly sessionTitle: string
   /** Per-session accent color name (`/color`), '' when unset — persisted via
@@ -533,6 +537,12 @@ export interface ChannelUi {
    * time; agent swaps (/resume /rewind /new) are reflected immediately.
    */
   traceEvents(): readonly RawTrajEvent[]
+  /**
+   * Channel-owned trajectory projection. The value is opaque at this host
+   * boundary and is returned directly: structurally copying a long session's
+   * maps on every version would recreate the render-time stall.
+   */
+  trajectory(): unknown
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
   setToolBackground(background: ToolBackground): void

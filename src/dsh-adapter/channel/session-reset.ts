@@ -4,6 +4,7 @@ import type { ChannelState } from './types.js'
 export type SessionResetState = Pick<
   ChannelState,
   | 'rows'
+  | 'rowsGeneration'
   | 'todos'
   | 'pending'
   | 'goal'
@@ -37,6 +38,7 @@ export function resetSessionProjection(
 ): void {
   resetProjector()
   rowIds.value = 0
+  state.rowsGeneration += 1
   state.rows.length = 0
   markChannelReadDirty(state.rows)
   resetSubagents()

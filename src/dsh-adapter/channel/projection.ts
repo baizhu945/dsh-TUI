@@ -28,6 +28,7 @@ interface ProjectionDependencies {
  notify: ChannelState['notify']
  tools?: ToolsRegistryLike
  renderer?: TuiRendererHost
+ onStreamingChange(): void
  /** DSH attachment service, resolved at call time (a late-mounted provider
   *  must still serve images for rows projected earlier). */
  attachments(): unknown
@@ -74,6 +75,11 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
   const lastTextDelta = new Map<ChatRow, string>()
   const stepKey = (turn: number, step: number): string => `${turn}:${step}`
   const touchRow = (row: ChatRow): void => { markChannelReadDirty(row); markChannelReadDirty(state.rows) }
+  const setStreaming = (row: ChatRow, value: boolean): void => {
+    if (row.streaming === value) return
+    row.streaming = value
+    deps.onStreamingChange()
+  }
   const appendRow = (row: ChatRow): void => { state.rows.push(row); markChannelReadDirty(state.rows) }
 
   /** Durable session image blocks, loaded lazily through the attachment
@@ -171,7 +177,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       ? undefined
       : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
     if (existing !== undefined) {
-      existing.streaming = true
+      setStreaming(existing, true)
       touchRow(existing)
       streaming = existing
       return existing
@@ -200,7 +206,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         lastReasoningRow.step === step
       ) {
         reasoning = lastReasoningRow.row
-        reasoning.streaming = true
+        setStreaming(reasoning, true)
         touchRow(reasoning)
         const sealedIdx = sealedReasoning.indexOf(reasoning)
         if (sealedIdx !== -1) sealedReasoning.splice(sealedIdx, 1)
@@ -234,7 +240,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     if (reasoning === undefined || state.thinkingFold !== 'preview') return
     const duration = Math.max(0, Date.now() - reasoningStart)
     reasoning.durationMs = duration
-    reasoning.streaming = false
+    setStreaming(reasoning, false)
     touchRow(reasoning)
     sealedReasoning.push(reasoning)
     reasoning = undefined
@@ -242,13 +248,13 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
   }
 
   const settleStreaming = (): void => {
-    if (streaming !== undefined) { streaming.streaming = false; touchRow(streaming) }
+    if (streaming !== undefined) { setStreaming(streaming, false); touchRow(streaming) }
     streaming = undefined
     const folded = sealedReasoning.length + (reasoning !== undefined ? 1 : 0)
-    for (const row of sealedReasoning) { row.streaming = false; touchRow(row) }
+    for (const row of sealedReasoning) { setStreaming(row, false); touchRow(row) }
     sealedReasoning.length = 0
     if (reasoning !== undefined) {
-      reasoning.streaming = false
+      setStreaming(reasoning, false)
       reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
       touchRow(reasoning)
     }
@@ -468,7 +474,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
             const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
             assistantRowsByStep.set(key, row)
             streaming = row
-            row.streaming = true
+            setStreaming(row, true)
             touchRow(row)
             const before = row.text.length
             appendTextDelta(row, chunk.text)
@@ -552,7 +558,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           row.time = event.time
           if (text) row.text = text
           row.images = images.length === 0 ? undefined : images
-          row.streaming = false
+          setStreaming(row, false)
           // Live settles keep the smooth-reveal cursor alive (a one-shot
           // non-streaming delivery still paints as a flow); replayed
           // settles must not — the transcript would typewrite on open.
@@ -569,7 +575,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           // (/settings opt-in) keeps the block expanded until turn settle
           // — settleStreaming folds the sealed rows then.
           reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
-          if (state.thinkingFold === 'preview') reasoning.streaming = false
+          if (state.thinkingFold === 'preview') setStreaming(reasoning, false)
           touchRow(reasoning)
           sealedReasoning.push(reasoning)
           logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)

@@ -107,12 +107,15 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'backgroundCurrent': 'mutate',
   'replyToAgent': 'mutate',
   'traceEvents': 'read-only',
+  'trajectory': 'read-only',
   'subscribe': 'subscribe'
 } satisfies Record<MethodKeys<ChannelUi>, HostEffectClass>)
 
 export const CHANNEL_UI_PROPERTIES = [
   'version',
   'rows',
+  'rowsStreamingVersion',
+  'rowsGeneration',
   'status',
   'sessionTitle',
   'sessionColor',

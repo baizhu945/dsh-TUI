@@ -222,6 +222,8 @@ export function MessageList({
   onLoadOlder,
   thinkingVisible = true,
   historyPaintEnabled = true,
+  streamingVersion,
+  rowsGeneration,
   registerRowRef,
   scrollHandle,
   forceMountRowId,
@@ -275,6 +277,10 @@ export function MessageList({
    * seconds of lex/highlight/layout before first paint).
    */
   historyPaintEnabled?: boolean
+  /** Channel-owned counter for in-place streaming-flag flips. */
+  streamingVersion?: number
+  /** Transcript generation; invalidates all row-id keyed geometry caches. */
+  rowsGeneration?: number
   /** Transcript search: register each row's DOM element for scroll-to-match. */
   registerRowRef?: (rowId: number, el: DOMElement | null) => void
   /** Scroll viewport the list virtualizes against. */
@@ -351,6 +357,7 @@ export function MessageList({
      * in place, rows identity/length unchanged) changes empty-assistant
      * filtering below, so the cache must rebuild on any bit change. */
     streamBits: Uint8Array
+    streamVersion: number
   } | null>(null)
   /** Generation counter for the visibleRows cache (timeline memo key). */
   const visGenRef = React.useRef(0)
@@ -360,11 +367,19 @@ export function MessageList({
   // assistant row that settles with EMPTY text crosses the empty-assistant
   // filter boundary (visible-while-streaming → filtered-when-settled).
   // Allocation-free scan; rebuild only when a bit actually flipped.
-  let streamBitsSame = visibleCache !== null && visibleCache.streamBits.length === rows.length
-  if (streamBitsSame) {
-    const bits = visibleCache!.streamBits
-    for (let i = 0; i < rows.length; i++) {
-      if (bits[i] !== (rows[i]!.streaming === true ? 1 : 0)) { streamBitsSame = false; break }
+  let streamBitsSame = false
+  if (visibleCache !== null && visibleCache.streamBits.length === rows.length) {
+    if (streamingVersion !== undefined) {
+      streamBitsSame = visibleCache.streamVersion === streamingVersion
+    } else {
+      const bits = visibleCache.streamBits
+      streamBitsSame = true
+      for (let i = 0; i < rows.length; i++) {
+        if (bits[i] !== (rows[i]!.streaming === true ? 1 : 0)) {
+          streamBitsSame = false
+          break
+        }
+      }
     }
   }
   if (
@@ -434,6 +449,7 @@ export function MessageList({
       out,
       margins,
       streamBits,
+      streamVersion: streamingVersion ?? -1,
     }
     visGenRef.current++
   }
@@ -534,6 +550,11 @@ export function MessageList({
     heightsVersionRef.current++
     baseRef.current = null
   }
+
+  // Row ids restart after a session reset. Never let the new transcript reuse
+  // heights, layout signatures, painted marks or timeline previews from the
+  // previous one.
+  const lastRowsGeneration = React.useRef(rowsGeneration)
 
   // --- layout signature: stale-height invalidation ------------------------
   // heightsRef entries outlive the commits that measured them, but many
@@ -883,6 +904,19 @@ export function MessageList({
   let upTurnIndex: number | null = null
   let downTurnIndex: number | null = null
   const timelineMemoRef = React.useRef<{ key: string; turns: TimelineTurn[] } | null>(null)
+  if (lastRowsGeneration.current !== rowsGeneration) {
+    lastRowsGeneration.current = rowsGeneration
+    heightsRef.current.clear()
+    heightsVersionRef.current++
+    sigRef.current.clear()
+    paintedOnceRef.current = new Set()
+    paintedBaseRef.current = undefined
+    baseRef.current = null
+    previewCacheRef.current.clear()
+    timelineMemoRef.current = null
+    paintEdgeRef.current = -1
+    lastStartRef.current = -1
+  }
   {
     // Split into (a) a GEOMETRY-memoized turns list and (b) a per-frame
     // allocation-free target scan. Before the split this block rebuilt on

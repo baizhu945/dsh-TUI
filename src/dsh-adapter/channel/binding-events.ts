@@ -1,10 +1,12 @@
 import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { InputConvergence } from './input-actions.js'
 import type { ChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import { type createChannelProjection } from './projection.js'
 import type { ChannelState } from './types.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 
 /**
  * The binding event router is the sole subscriber for a foreground Agent.
@@ -31,6 +33,10 @@ export function createBindingEvents(ctx: Context, deps: {
   subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
   agentView: { schedule(): void }
   messageObserver?: { publish(session: unknown, event: unknown): void }
+  trajectory: {
+    rebuild(events: readonly SessionEvent[]): void
+    append(event: SessionEvent): void
+  }
 }) {
   const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
     if (!deps.state.working) return
@@ -58,6 +64,10 @@ export function createBindingEvents(ctx: Context, deps: {
       deps.modeActions.refreshMode()
       const capture = deps.binding.capture()
       const session = capture.agent.session
+      // Build once for this foreground binding. The projector replay already
+      // happened before bind; this fold is intentionally independent of the
+      // renderer so a large historical event log never blocks first paint.
+      deps.trajectory.rebuild(snapshotLiveSessionEvents(session))
       const current = (): boolean => deps.owner.current() && deps.binding.isCurrent(capture)
       const register = <T extends () => void>(dispose: T): T => {
         deps.binding.subscribe(dispose)
@@ -132,6 +142,7 @@ export function createBindingEvents(ctx: Context, deps: {
         deps.activity.onSessionEvent(event)
         deps.modeActions.onSessionEvent(subject, event)
         deps.projector.renderEvent(event)
+        deps.trajectory.append(event)
         if (event.type === 'assistant/chunk') deps.state.emitStream()
         else deps.state.emit()
       })

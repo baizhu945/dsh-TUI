@@ -55,6 +55,7 @@ import {
   type RawTrajEvent,
 } from './guards.js'
 import { BURST_MIN, type TrajKind, type TrajNode, type TrajTokens } from './types.js'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
 
 /** Per-step streaming timestamps, the source of TTFT and decode duration. */
@@ -74,8 +75,12 @@ export interface StepTiming {
  * append folds only its tail; treat every field as owned by this module.
  */
 export interface TrajBuild {
-  /** The snapshot this build consumed; identity-compared on the next append. */
+  /** The snapshot consumed by snapshot-based extension (event-time appends
+   * intentionally retain the previous reference; `revision` is authoritative
+   * for those live builds). */
   readonly source: readonly RawTrajEvent[]
+  /** Monotonic revision; advances for every event folded, including closes. */
+  readonly revision: number
   /** The ledger, in log order, after burst folding. */
   readonly nodes: TrajNode[]
   /** Per-step timing keyed `${turn}:${step}`, for the hotspot aggregate. */
@@ -721,7 +726,7 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
 /** An empty build, used as the identity element and for empty sessions. */
 export function emptyTrajectory(): TrajBuild {
   const state = newState()
-  return { source: [], nodes: [], timing: new Map(), counts: state.counts, state }
+  return { source: [], revision: 0, nodes: [], timing: new Map(), counts: state.counts, state }
 }
 
 /**
@@ -750,14 +755,53 @@ export function extendTrajectory(
       consume(state, nodes, timing, raw[index]!)
     }
     syncRowCount(state, nodes)
-    return { source: raw, nodes, timing, counts: state.counts, state }
+    return {
+      source: raw,
+      revision: previous.revision + (raw.length - previous.source.length),
+      nodes,
+      timing,
+      counts: state.counts,
+      state,
+    }
   }
   const nodes: TrajNode[] = []
   const timing = new Map<string, StepTiming>()
   const state = newState()
   for (const event of raw) consume(state, nodes, timing, event)
   syncRowCount(state, nodes)
-  return { source: raw, nodes, timing, counts: state.counts, state }
+  return { source: raw, revision: raw.length, nodes, timing, counts: state.counts, state }
+}
+
+/**
+ * Fold an already received event batch without reading the session snapshot.
+ *
+ * The session event observer already owns the appended events, so asking the
+ * session for its full snapshot here would put an O(session) getter back on
+ * the token-rate path.  Chunk-only batches only update step timing and reuse
+ * the fold maps; structural events clone the small bracket indexes before
+ * mutating them. The returned build retains `previous.source` by design;
+ * callers that need a current snapshot should read the session separately.
+ */
+export function extendTrajectoryEvents(
+  previous: TrajBuild,
+  appended: readonly SessionEvent[],
+): TrajBuild {
+  if (appended.length === 0) return previous
+  const raw = asRawEvents(appended)
+  const pureTiming = raw.every(event => event.type === 'assistant/chunk')
+  const nodes = previous.nodes
+  const timing = previous.timing
+  const state = pureTiming ? previous.state : cloneState(previous.state)
+  for (const event of raw) consume(state, nodes, timing, event)
+  syncRowCount(state, nodes)
+  return {
+    source: previous.source,
+    revision: previous.revision + raw.length,
+    nodes,
+    timing,
+    counts: state.counts,
+    state,
+  }
 }
 
 /**

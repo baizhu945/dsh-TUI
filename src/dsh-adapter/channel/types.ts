@@ -70,6 +70,7 @@ export interface ToolViewPresenter {
 export interface Channel extends Omit<ChannelUi, 'pluginScene' | 'traceEvents'> {
  readonly pluginScene: TuiSceneDescriptor | undefined
  traceEvents(): readonly SessionEvent[]
+ trajectory(): unknown
  releaseContributions(): void
 }
 type MutableChannelView = { -readonly [K in keyof ChannelUi]: ChannelUi[K] }
@@ -112,6 +113,8 @@ export interface ChannelState extends Omit<MutableChannelView, 'rows' | 'notific
   releaseContributions(): void
   /** Live session event log (see the public Channel type, `/trace`). */
   traceEvents(): readonly SessionEvent[]
+  /** Event-time trajectory projection exposed through the guarded UI seam. */
+  trajectory(): unknown
 }
 
 export type FileSuggestionFs = {

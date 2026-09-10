@@ -35,6 +35,7 @@ import {
   columnOfIndex,
   dominantChannel,
   extendTrajectory,
+  extendTrajectoryEvents,
   previewText,
   projectWave,
 } from '../lib/types/dsh-adapter/trajectory/index.js'
@@ -162,6 +163,13 @@ check('fixture folds to a non-trivial ledger', whole.nodes.length > 40, `${whole
   for (let i = 1; i <= events.length; i++) build = extendTrajectory(build, events.slice(0, i))
   check('one-event-at-a-time replay equals from-scratch', diff(build.nodes, whole.nodes) === null, diff(build.nodes, whole.nodes) ?? '')
   check('unchanged snapshot returns the same build object', extendTrajectory(build, build.source) === build)
+
+  // Channel event-time path: append the already-observed event directly,
+  // without asking Session for another full immutable snapshot.
+  let eventBuild = buildTrajectory(events.slice(0, 1))
+  for (let i = 1; i < events.length; i++) eventBuild = extendTrajectoryEvents(eventBuild, [events[i]])
+  check('event-time append fold equals from-scratch', diff(eventBuild.nodes, whole.nodes) === null, diff(eventBuild.nodes, whole.nodes) ?? '')
+  check('event-time append revision tracks consumed events', eventBuild.revision === events.length, `${eventBuild.revision} / ${events.length}`)
 }
 
 // ───────────────────────── 2 · bracket pairing ──────────────────────────────
